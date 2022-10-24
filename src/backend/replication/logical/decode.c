@@ -45,6 +45,7 @@
 #include "replication/snapbuild.h"
 
 #include "storage/standby.h"
+#include "unistd.h"
 
 typedef struct XLogRecordBuffer
 {
@@ -76,6 +77,10 @@ static void DecodeAbort(LogicalDecodingContext *ctx, XLogRecordBuffer *buf,
 
 /* common function to decode tuples */
 static void DecodeXLogTuple(char *data, Size len, ReorderBufferTupleBuf *tup);
+
+static void DecodeDistributedForget(LogicalDecodingContext *ctx, XLogRecordBuffer *buf,
+			                        xl_xact_parsed_distributed_forget *parsed, 
+						            DistributedTransactionId gxid, int cnt_segments);
 
 /*
  * Take every XLogReadRecord()ed record and perform the actions required to
@@ -220,12 +225,12 @@ DecodeXLogOp(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
 /*
  * Handle rmgr XACT_ID records for DecodeRecordIntoReorderBuffer().
  */
-static void
+static void//这个buf，是不是已经是半解析出来的东西了？
 DecodeXactOp(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
 {
 	SnapBuild  *builder = ctx->snapshot_builder;
 	ReorderBuffer *reorder = ctx->reorder;
-	XLogReaderState *r = buf->record;
+	XLogReaderState *r = buf->record;//好的，这里的细节我就先不管了
 	uint8		info = XLogRecGetInfo(r) & XLOG_XACT_OPMASK;
 
 	/*
@@ -240,8 +245,11 @@ DecodeXactOp(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
 	switch (info)
 	{
 		case XLOG_XACT_COMMIT:
-		case XLOG_XACT_COMMIT_PREPARED:
+		case XLOG_XACT_COMMIT_PREPARED://打日志确认下，这个在分布式情况下，只会出现XLOG_XACT_COMMIT_PREPARED对吧？
 			{
+				FILE* f = fopen("/home/gpadmin/wangchonglog", "a");
+				fprintf(f, "%d:decode commit act case: %d\n", getpid(), info);
+
 				xl_xact_commit *xlrec;
 				xl_xact_parsed_commit parsed;
 				TransactionId xid;
@@ -249,12 +257,54 @@ DecodeXactOp(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
 				xlrec = (xl_xact_commit *) XLogRecGetData(r);
 				ParseCommitRecord(XLogRecGetInfo(buf->record), xlrec, &parsed);
 
-				if (!TransactionIdIsValid(parsed.twophase_xid))
+				if (!TransactionIdIsValid(parsed.twophase_xid))//这两种情况，是不是都是分布式事务，只是有一个
+				{
+					fprintf(f, "DecodeXactOp: gxid case1, %d\n", getpid());
 					xid = XLogRecGetXid(r);
+				}
 				else
+				{
+					fprintf(f, "DecodeXactOp: gxid case2, %d\n", getpid());
 					xid = parsed.twophase_xid;
+				}
+					
+				fprintf(f, "DecodeXactOp: one_phase:%d, %d\n", parsed.is_one_phase, getpid());
+				fprintf(f, "DecodeXactOp: distribXid:%d, %d\n", parsed.distribXid, getpid());
+				fclose(f);
 
-				DecodeCommit(ctx, buf, &parsed, xid);
+				DecodeCommit(ctx, buf, &parsed, xid);//虽然把两种情况揉一起了，但暂时看对我没有什么影响
+				break;
+			}
+		case XLOG_XACT_DISTRIBUTED_COMMIT:
+			{
+				//do nothing
+				FILE* f = fopen("/home/gpadmin/wangchonglog", "a");
+				fprintf(f, "%d:decode distributed commit, do nothing\n", getpid());
+				fclose(f);
+				break;
+			}
+		case XLOG_XACT_DISTRIBUTED_FORGET:
+			{
+				FILE* f = fopen("/home/gpadmin/wangchonglog", "a");
+				fprintf(f, "%d:decode distributed forget\n", getpid());
+				fclose(f);
+
+				xl_xact_distributed_forget *xlrec;
+				xl_xact_parsed_distributed_forget parsed;
+				DistributedTransactionId gid;
+				int cnt_segments;
+
+				xlrec = (xl_xact_distributed_forget *) XLogRecGetData(r);
+				ParseDistributedForgetRecord(XLogRecGetInfo(buf->record), xlrec, &parsed);
+
+				gid = parsed.gxid;
+				cnt_segments = parsed.cnt_segments;
+
+				f = fopen("/home/gpadmin/wangchonglog", "a");
+				fprintf(f, "%d:decode distributed transaction id:%ld\n", getpid(), gid);
+				fclose(f);
+
+				DecodeDistributedForget(ctx, buf, &parsed, gid, cnt_segments);//这个会难一些啊
 				break;
 			}
 		case XLOG_XACT_ABORT:
@@ -577,6 +627,9 @@ DecodeCommit(LogicalDecodingContext *ctx, XLogRecordBuffer *buf,
 	RepOriginId origin_id = XLogRecGetOrigin(buf->record);
 	int			i;
 
+	FILE* f = fopen("/home/gpadmin/wangchonglog", "a");
+	fprintf(f, "DecodeCommit: step into, %d\n", getpid());
+
 	if (parsed->xinfo & XACT_XINFO_HAS_ORIGIN)
 	{
 		origin_lsn = parsed->origin_lsn;
@@ -645,9 +698,20 @@ DecodeCommit(LogicalDecodingContext *ctx, XLogRecordBuffer *buf,
 								 buf->origptr, buf->endptr);
 	}
 
+	fprintf(f, "DecodeCommit: one_phase:%d, %d\n", parsed->is_one_phase, getpid());
+	fprintf(f, "DecodeCommit: distribXid:%d, %d\n", parsed->distribXid, getpid());
+	fclose(f);
+
 	/* replay actions of all transaction + subtransactions in order */
 	ReorderBufferCommit(ctx->reorder, xid, buf->origptr, buf->endptr,
-						commit_time, origin_id, origin_lsn);
+						commit_time, origin_id, origin_lsn, parsed->distribXid, parsed->is_one_phase);
+}
+
+static void
+DecodeDistributedForget(LogicalDecodingContext *ctx, XLogRecordBuffer *buf,
+			 xl_xact_parsed_distributed_forget *parsed, DistributedTransactionId gxid, int cnt_segments)
+{
+	ReorderBufferDistributedForget(ctx->reorder, gxid, cnt_segments);
 }
 
 /*

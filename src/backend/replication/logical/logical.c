@@ -43,6 +43,7 @@
 #include "storage/procarray.h"
 
 #include "utils/memutils.h"
+#include "unistd.h"
 
 /* data for errcontext callback */
 typedef struct LogicalErrorCallbackState
@@ -67,6 +68,8 @@ static void truncate_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
 static void message_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
 							   XLogRecPtr message_lsn, bool transactional,
 							   const char *prefix, Size message_size, const char *message);
+
+static void distributed_forget_cb_wrapper(ReorderBuffer *cache, DistributedTransactionId gxid, int cnt_segments);
 
 static void LoadOutputPlugin(OutputPluginCallbacks *callbacks, char *plugin);
 
@@ -117,7 +120,7 @@ CheckLogicalDecodingRequirements(void)
  * Helper function for CreateInitDecodingContext() and
  * CreateDecodingContext() performing common tasks.
  */
-static LogicalDecodingContext *
+static LogicalDecodingContext *//别把跟slot的初始化弄混了
 StartupDecodingContext(List *output_plugin_options,
 					   XLogRecPtr start_lsn,
 					   TransactionId xmin_horizon,
@@ -170,7 +173,7 @@ StartupDecodingContext(List *output_plugin_options,
 		LWLockRelease(ProcArrayLock);
 	}
 
-	ctx->slot = slot;
+	ctx->slot = slot;//关联
 
 	ctx->reader = XLogReaderAllocate(wal_segment_size, read_page, ctx);
 	if (!ctx->reader)
@@ -180,7 +183,7 @@ StartupDecodingContext(List *output_plugin_options,
 
 	ctx->reorder = ReorderBufferAllocate();
 	ctx->snapshot_builder =
-		AllocateSnapshotBuilder(ctx->reorder, xmin_horizon, start_lsn,
+		AllocateSnapshotBuilder(ctx->reorder, xmin_horizon, start_lsn,//在这里的话就只跟快照相关了
 								need_full_snapshot);
 
 	ctx->reorder->private_data = ctx;
@@ -191,6 +194,8 @@ StartupDecodingContext(List *output_plugin_options,
 	ctx->reorder->apply_truncate = truncate_cb_wrapper;
 	ctx->reorder->commit = commit_cb_wrapper;
 	ctx->reorder->message = message_cb_wrapper;
+
+	ctx->reorder->distributed_forget = distributed_forget_cb_wrapper;
 
 	ctx->out = makeStringInfo();
 	ctx->prepare_write = prepare_write;
@@ -224,7 +229,7 @@ StartupDecodingContext(List *output_plugin_options,
  * inside it.
  *
  * Returns an initialized decoding context after calling the output plugin's
- * startup function.
+ * startup function.//最后这句话什么意思，跟插件的初始化有什么关系？
  */
 LogicalDecodingContext *
 CreateInitDecodingContext(char *plugin,
@@ -242,7 +247,7 @@ CreateInitDecodingContext(char *plugin,
 	MemoryContext old_context;
 
 	/* shorter lines... */
-	slot = MyReplicationSlot;
+	slot = MyReplicationSlot;//一个进程就这一个了？如果我们只使用一个slot的话倒没啥影响
 
 	/* first some sanity checks that are unlikely to be violated */
 	if (slot == NULL)
@@ -275,11 +280,11 @@ CreateInitDecodingContext(char *plugin,
 	SpinLockRelease(&slot->mutex);
 
 	if (XLogRecPtrIsInvalid(restart_lsn))
-		ReplicationSlotReserveWal();
+		ReplicationSlotReserveWal();//reserve，注释里也提了这个词，看下这个默认的行为
 	else
 	{
 		SpinLockAcquire(&slot->mutex);
-		slot->data.restart_lsn = restart_lsn;
+		slot->data.restart_lsn = restart_lsn;//我刚才在哪看到个反向赋值的动作，得从头再捋遍代码了。。。
 		SpinLockRelease(&slot->mutex);
 	}
 
@@ -323,8 +328,9 @@ CreateInitDecodingContext(char *plugin,
 
 	LWLockRelease(ProcArrayLock);
 
-	ReplicationSlotMarkDirty();
-	ReplicationSlotSave();
+	//而且你下一步就持久化了，你这里标记dirty，多此一举啊。。。。
+	ReplicationSlotMarkDirty();//这里还有个持久化的动作，跟上边的restart_lsn有关系吗？
+	ReplicationSlotSave();//把整个persistent持久化了，但你看持久化的confirm是从哪来的呢？
 
 	ctx = StartupDecodingContext(NIL, restart_lsn, xmin_horizon,
 								 need_full_snapshot, false,
@@ -334,7 +340,7 @@ CreateInitDecodingContext(char *plugin,
 	/* call output plugin initialization callback */
 	old_context = MemoryContextSwitchTo(ctx->context);
 	if (ctx->callbacks.startup_cb != NULL)
-		startup_cb_wrapper(ctx, &ctx->options, true);
+		startup_cb_wrapper(ctx, &ctx->options, true);//插件初始化在这里
 	MemoryContextSwitchTo(old_context);
 
 	ctx->reorder->output_rewrites = ctx->options.receive_rewrites;
@@ -461,14 +467,14 @@ DecodingContextReady(LogicalDecodingContext *ctx)
 /*
  * Read from the decoding slot, until it is ready to start extracting changes.
  */
-void
+void//确定这里是重启时用的，如果是这里从持久化中拿到的confirm_flush，那就稳了。。。创建流程中也有这个。。。
 DecodingContextFindStartpoint(LogicalDecodingContext *ctx)
 {
 	XLogRecPtr	startptr;
 	ReplicationSlot *slot = ctx->slot;
 
 	/* Initialize from where to start reading WAL. */
-	startptr = slot->data.restart_lsn;
+	startptr = slot->data.restart_lsn;//哈哈哈
 
 	elog(DEBUG1, "searching for logical decoding starting point, starting at %X/%X",
 		 (uint32) (slot->data.restart_lsn >> 32),
@@ -489,7 +495,7 @@ DecodingContextFindStartpoint(LogicalDecodingContext *ctx)
 
 		startptr = InvalidXLogRecPtr;
 
-		LogicalDecodingProcessRecord(ctx, ctx->reader);
+		LogicalDecodingProcessRecord(ctx, ctx->reader);//这怎么一个雷接一个雷。。。
 
 		/* only continue till we found a consistent spot */
 		if (DecodingContextReady(ctx))
@@ -535,7 +541,7 @@ OutputPluginPrepareWrite(struct LogicalDecodingContext *ctx, bool last_write)
 /*
  * Perform a write using the context's output routine.
  */
-void
+void//之前看到过，应该是需要个write，write_prepare函数？
 OutputPluginWrite(struct LogicalDecodingContext *ctx, bool last_write)
 {
 	if (!ctx->prepared_write)
@@ -702,6 +708,11 @@ commit_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
 
 	Assert(!ctx->fast_forward);
 
+	FILE* f = fopen("/home/gpadmin/wangchonglog", "a");
+	fprintf(f, "commit_cb_wrapper: one_phase:%d, %d\n", txn->is_one_phase, getpid());
+	fprintf(f, "commit_cb_wrapper: gxid:%d, %d\n", txn->gxid, getpid());
+	fclose(f);
+
 	/* Push callback + info on the error context stack */
 	state.ctx = ctx;
 	state.callback_name = "commit";
@@ -721,6 +732,26 @@ commit_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
 
 	/* Pop the error context stack */
 	error_context_stack = errcallback.previous;
+}
+
+static void distributed_forget_cb_wrapper(ReorderBuffer *cache, DistributedTransactionId gxid, int cnt_segments)
+{
+	LogicalDecodingContext *ctx = cache->private_data;
+	//LogicalErrorCallbackState state;
+	//ErrorContextCallback errcallback;看看这个到时候是否需要？
+
+	/* set output state */
+	//这3条是必须的吗？我不写会不会有问题？
+	ctx->accept_writes = true;
+	//ctx->write_xid = txn->xid;
+	//ctx->write_location = txn->end_lsn;
+
+	FILE* f = fopen("/home/gpadmin/wangchonglog", "a");
+	fprintf(f, "%d:logical.c wrapper:%ld\n", getpid(), gxid);
+	fclose(f);
+
+	/* do the actual work: call callback */
+	ctx->callbacks.distributed_forget_cb(ctx, gxid, cnt_segments);
 }
 
 static void
@@ -998,10 +1029,10 @@ LogicalIncreaseRestartDecodingForSlot(XLogRecPtr current_lsn, XLogRecPtr restart
 }
 
 /*
- * Handle a consumer's confirmation having received all changes up to lsn.
+ * Handle a consumer's confirmation having received all changes up to lsn.好厉害的样子
  */
 void
-LogicalConfirmReceivedLocation(XLogRecPtr lsn)
+LogicalConfirmReceivedLocation(XLogRecPtr lsn)//
 {
 	Assert(lsn != InvalidXLogRecPtr);
 
@@ -1014,7 +1045,7 @@ LogicalConfirmReceivedLocation(XLogRecPtr lsn)
 
 		SpinLockAcquire(&MyReplicationSlot->mutex);
 
-		MyReplicationSlot->data.confirmed_flush = lsn;
+		MyReplicationSlot->data.confirmed_flush = lsn;//所以save只是去持久化，具体设置是在这里
 
 		/* if we're past the location required for bumping xmin, do so */
 		if (MyReplicationSlot->candidate_xmin_lsn != InvalidXLogRecPtr &&

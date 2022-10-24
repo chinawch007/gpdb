@@ -1621,9 +1621,9 @@ RecordTransactionCommit(void)
 
 		SetCurrentTransactionStopTimestamp();
 
-		SIMPLE_FAULT_INJECTOR("onephase_transaction_commit");
+		SIMPLE_FAULT_INJECTOR("onephase_transaction_commit");//这是怎么得出的说我是单阶段的结论呢？
 
-		XactLogCommitRecord(xactStopTimestamp,
+		XactLogCommitRecord(xactStopTimestamp,//这里是被调的
 							GetPendingTablespaceForDeletionForCommit(),
 							nchildren, children, nrels, rels,
 							nmsgs, invalMessages,
@@ -1797,8 +1797,9 @@ RecordDistributedForgetCommitted(DistributedTransactionId gxid)
 	xl_xact_distributed_forget xlrec;
 
 	xlrec.gxid = gxid;
+	xlrec.cnt_segments = list_length(MyTmGxactLocal->dtxSegments);
 
-	XLogBeginInsert();
+	XLogBeginInsert();//没有copy缓冲区，那会不会有点乱？
 	XLogRegisterData((char *) &xlrec, sizeof(xl_xact_distributed_forget));
 
 	XLogInsert(RM_XACT_ID, XLOG_XACT_DISTRIBUTED_FORGET);
@@ -2822,7 +2823,7 @@ CommitTransaction(void)
 	/*
 	 * Prepare all QE.
 	 */
-	prepareDtxTransaction();
+	prepareDtxTransaction();//具体在哪里接受QE传过来的消息的？
 
 #ifdef FAULT_INJECTOR
 	if (isPreparedDtxTransaction())
@@ -6709,7 +6710,7 @@ xactGetCommittedChildren(TransactionId **ptr)
  * Log the commit record for a plain or twophase transaction commit.
  *
  * A 2pc commit will be emitted when twophase_xid is valid, a plain one
- * otherwise.
+ * otherwise.//所以这俩区别在哪啊？我咋开始感觉你这个2pc跟我们的分布式事务不是一个事呢。。。
  */
 XLogRecPtr
 XactLogCommitRecord(TimestampTz commit_time,
@@ -6734,7 +6735,7 @@ XactLogCommitRecord(TimestampTz commit_time,
 	xl_xact_deldbs xl_deldbs;
 	XLogRecPtr recptr;
 	bool isOnePhaseQE = (Gp_role == GP_ROLE_EXECUTE && MyTmGxactLocal->isOnePhaseCommit);
-	bool isDtxPrepared = isPreparedDtxTransaction();
+	bool isDtxPrepared = isPreparedDtxTransaction();//坑了，这个是master独有的。。。
 
 	uint8		info;
 
@@ -6748,7 +6749,12 @@ XactLogCommitRecord(TimestampTz commit_time,
 	else if (!TransactionIdIsValid(twophase_xid))
 		info = XLOG_XACT_COMMIT;
 	else
-		info = XLOG_XACT_COMMIT_PREPARED;
+		info = XLOG_XACT_COMMIT_PREPARED;//好的，从这里看下去，除了本地事务id之外，有没有分布式事务id
+
+	FILE* f = fopen("/home/gpadmin/wangchonglog", "a");
+	fprintf(f, "XactLogCommitRecord info:%d, pid:%d\n", info, getpid());
+	fprintf(f, "twophase_xid:%d, pid:%d\n", twophase_xid, getpid());
+	fprintf(f, "true gid:%d, pid:%d\n", getDistributedTransactionId(), getpid());
 
 	/* First figure out and collect all the information needed */
 
@@ -6804,7 +6810,7 @@ XactLogCommitRecord(TimestampTz commit_time,
 		xl_deldbs.ndeldbs = ndeldbs;
 	}
 
-	if (TransactionIdIsValid(twophase_xid))
+	if (TransactionIdIsValid(twophase_xid))//单阶段的话，这个是我们的反例
 	{
 		xl_xinfo.xinfo |= XACT_XINFO_HAS_TWOPHASE;
 		xl_twophase.xid = twophase_xid;
@@ -6823,11 +6829,25 @@ XactLogCommitRecord(TimestampTz commit_time,
 		xl_origin.origin_timestamp = replorigin_session_origin_timestamp;
 	}
 
-	if (isDtxPrepared || isOnePhaseQE)
+	//if (isDtxPrepared || isOnePhaseQE)//这部分加些日志吧
+	if (isDtxPrepared || isOnePhaseQE || info == XLOG_XACT_COMMIT_PREPARED)
 	{
+		fprintf(f, "XactLogCommitRecord in onephase scope pid:%d\n", getpid());
+
 		xl_xinfo.xinfo |= XACT_XINFO_HAS_DISTRIB;
-		xl_distrib.distrib_xid = getDistributedTransactionId();
+		xl_distrib.distrib_xid = getDistributedTransactionId();//就是说单阶段的话，但是我怎么跟2pc事务做区分呢？
+		fprintf(f, "XactLogCommitRecord distrib_xid:%d, pid:%d\n", xl_distrib.distrib_xid, getpid());
+		if (isOnePhaseQE)
+		{
+			fprintf(f, "XactLogCommitRecord one phase bool assign pid:%d\n", getpid());
+			xl_distrib.is_one_phase = true;
+		}
+		else
+		{
+			xl_distrib.is_one_phase = false;
+		}
 	}
+	fclose(f);
 
 	if (xl_xinfo.xinfo != 0)
 		info |= XLOG_XACT_HAS_INFO;
@@ -6878,7 +6898,7 @@ XactLogCommitRecord(TimestampTz commit_time,
 	{
 		XLogRegisterData((char *) (&xl_twophase), sizeof(xl_xact_twophase));
 		if (xl_xinfo.xinfo & XACT_XINFO_HAS_GID)
-			XLogRegisterData(unconstify(char *, twophase_gid), strlen(twophase_gid) + 1);
+			XLogRegisterData(unconstify(char *, twophase_gid), strlen(twophase_gid) + 1);//好的，有这个，看看我们可以用吗？
 	}
 
 	if (xl_xinfo.xinfo & XACT_XINFO_HAS_ORIGIN)
@@ -6893,7 +6913,7 @@ XactLogCommitRecord(TimestampTz commit_time,
 	if (isDtxPrepared)
 		insertingDistributedCommitted();
 
-	recptr = XLogInsert(RM_XACT_ID, info);
+	recptr = XLogInsert(RM_XACT_ID, info);//看来也只有这里能写提交点日志了
 
 	if (isDtxPrepared)
 		insertedDistributedCommitted();
