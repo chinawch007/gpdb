@@ -5806,6 +5806,17 @@ PostgresMain(int argc, char *argv[],
 				break;
 
 			case 'd':			/* copy data */
+				if (am_walsender_controller)
+				{
+					/*
+					if (!exec_walsendercontroller_command(query_string))
+						exec_simple_query(query_string);
+					*/
+					char* query_string = pq_getmsgstring(&input_message);
+					FILE* f = fopen("/home/gpadmin/wangchonglog", "a");
+					fprintf(f, "recv d msg:%s\n", query_string);
+					break;
+				}
 			case 'c':			/* copy done */
 			case 'f':			/* copy fail */
 

@@ -2419,6 +2419,12 @@ retry1:
 				 * connects to a specific database which is e.g. required for
 				 * logical decoding while.
 				 */
+
+				/*
+				 * During logical decoding, we also need decode master's log about distributed-transaction
+				 * in this case, we treat this process as a common postgres like a segment who decoding its log
+				 * keyword "database" is used by coordinator process, so we invent a new keyword "master"
+				*/
 				if (strcmp(valptr, "master") == 0)
 				{
 					am_walsender = true;
@@ -2430,6 +2436,8 @@ retry1:
 					fprintf(f, "gprole:%d, pid:%d\n", Gp_role, getpid());
 					fclose(f);
 
+					//if this process is a QD, we treat this process as a coordinator
+					//who control logical decoding of segments
 					if (Gp_role == GP_ROLE_DISPATCH)
 					{
 						FILE* f = fopen("/home/gpadmin/wangchonglog", "a");
@@ -4648,8 +4656,6 @@ BackendStartup(Port *port)
 
 		/* Close the postmaster's sockets */
 		ClosePostmasterPorts(false);
-
-		//sleep(20);
 
 		/* Perform additional initialization and collect startup packet */
 		BackendInitialize(port);

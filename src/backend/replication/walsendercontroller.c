@@ -57,6 +57,7 @@
 #include "cdb/cdbutil.h"
 #include "replication/gp_replication.h"
 
+//this process is a coordinator who control the logical decoding of segments
 bool am_walsender_controller = false;
 
 static StringInfoData output_message;
@@ -69,6 +70,9 @@ char* ports[MAX_SEGMENTS_COUNT + 1];
 int cnt_conns = 0;
 
 bool CONN_INITED = false;
+
+PGconn* snapshot_conn = NULL;
+char* snapshot[100];
 
 static void //正常是需要获取地址加port的，这里暂时只处理port
 GetPorts()
@@ -231,13 +235,153 @@ DispatchCommand(char* query, ExecStatusType success_ret)
 	fclose(f);
 }
 
+static DistributedTransactionId
+StartSnapshotTransaction()
+{
+	DistributedTransactionId gxid;
+
+	FILE* f = fopen("/home/gpadmin/wangchonglog", "a");
+	fprintf(f, "in StartSnapshotTransaction\n");
+
+	char query[256];
+	PGresult* res = NULL;
+
+	const char** keywords;
+	const char** values;
+
+	keywords = palloc0((4 + 1) * sizeof(*keywords));
+	values = palloc0((4 + 1) * sizeof(*values));
+	keywords[0] = "port";
+	values[0] = "15432";
+	keywords[1] = "hostaddr";
+	values[1] = "127.0.0.1";
+	keywords[2] = "dbname";
+	values[2] = "testdb";
+	keywords[3] = "user";
+	values[3] = "gpadmin";
+
+	snapshot_conn = PQconnectdbParams(keywords, values, true);
+	if (!snapshot_conn)
+	{
+		fprintf(f, "connect error1\n");
+		fclose(f);
+		return;
+	}
+
+	if (PQstatus(snapshot_conn) != CONNECTION_OK)
+	{
+		fprintf(f, "connect error2\n");
+		fclose(f);
+		return;
+	}
+
+	snprintf(query, sizeof(query), "begin;");
+	fprintf(f, "command:%s\n", query);
+
+	res = PQexec(snapshot_conn, query);
+	fprintf(f, "PQexec res:%d\n", PQresultStatus(res));
+
+	if (PQresultStatus(res) != PGRES_COMMAND_OK)
+	{
+		fprintf(f, "exec error\n");
+		fclose(f);
+		PQfinish(snapshot_conn);
+		return;
+	}
+
+	snprintf(query, sizeof(query), "select * from gp_distributed_xid();");
+	fprintf(f, "command:%s\n", query);
+
+	res = PQexec(snapshot_conn, query);
+	fprintf(f, "PQexec res:%d\n", PQresultStatus(res));
+
+	if (PQresultStatus(res) != PGRES_TUPLES_OK)
+	{
+		fprintf(f, "exec error\n");
+		fclose(f);
+		PQfinish(snapshot_conn);
+		return;
+	}
+
+	int n = PQntuples(res);
+	fprintf(f, "tuple cnt:%d, attrnums:%d\n", n, res->numAttributes);
+
+	char* v = NULL;
+	for (int i = 0; i < n; i++)
+	{
+		v = PQgetvalue(res, i, 0);//remember free
+		if(v)
+		{
+			fprintf(f, "%s\n", v);
+			fflush(f);
+			sscanf(v, "%lld", &gxid);
+		}
+		else 
+			fprintf(f, "null \n");
+	}
+
+	fclose(f);
+
+	return gxid;
+}
+
+static void
+GetSnapshot()
+{
+	FILE* f = fopen("/home/gpadmin/wangchonglog", "a");
+	fprintf(f, "in StartSnapshotTransaction\n");
+
+	char query[256];
+	PGresult* res = NULL;
+
+	snprintf(query, sizeof(query), "SELECT pg_export_snapshot();");
+	fprintf(f, "command:%s\n", query);
+
+	res = PQexec(snapshot_conn, query);
+	fprintf(f, "PQexec res:%d\n", PQresultStatus(res));
+
+	if (PQresultStatus(res) != PGRES_TUPLES_OK)
+	{
+		fprintf(f, "exec error\n");
+		fclose(f);
+		PQfinish(snapshot_conn);
+		return;
+	}
+
+	int n = PQntuples(res);
+	fprintf(f, "tuple cnt:%d, attrnums:%d\n", n, res->numAttributes);
+
+	char* v = NULL;
+	for (int i = 0; i < n; i++)
+	{
+		v = PQgetvalue(res, i, 0);//remember free
+		if(v)
+		{
+			fprintf(f, "%s\n", v);
+			strcpy(snapshot, v);
+		}
+		else 
+			fprintf(f, "null \n");
+	}
+
+	fclose(f);
+}
+
 static void
 CreateReplicationSlot(CreateReplicationSlotCmd *cmd)
 {
+	DistributedTransactionId snapshot_gxid = StartSnapshotTransaction();
+	//return;
+
+
 	InitConns();
 
 	FILE* f = fopen("/home/gpadmin/wangchonglog", "a");
 	fprintf(f, "in CreateReplicationSlot\n");
+
+	//开启个事务，拿到id，后边不等它
+
+	//怎么给gpcopy用呢？跟正常单机create一样，返回个id作为tuple一部分。
 
 	LWLockAcquire(StartTransactionLock, LW_EXCLUSIVE);
 
@@ -246,6 +390,7 @@ CreateReplicationSlot(CreateReplicationSlotCmd *cmd)
 	foreach(cell, gxids)
 	{
 		DistributedTransactionId gxid = *((DistributedTransactionId*)lfirst(cell));
+		if(gxid == snapshot_gxid)continue;
 		fprintf(f, "wait %lld\n", gxid);
 		fflush(f);
 		GxactLockTableWait(gxid);
@@ -259,6 +404,9 @@ CreateReplicationSlot(CreateReplicationSlotCmd *cmd)
 	fprintf(f, "command:%s\n", query);
 
 	DispatchCommand(query, PGRES_TUPLES_OK);
+
+	//这里用上边的事务连接来获取一个快照。
+	GetSnapshot();
 
 	LWLockRelease(StartTransactionLock);
 /*
