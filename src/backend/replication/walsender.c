@@ -3721,6 +3721,9 @@ WalSndKeepalive(bool requestReply)
 
 	/* ... and send it wrapped in CopyData */
 	pq_putmessage_noblock('d', output_message.data, output_message.len);
+	FILE* f = fopen("/home/gpadmin/wangchonglog", "a");
+	fprintf(f, "in WalSndKeepalive\n");
+	fclose(f);
 }
 
 /*

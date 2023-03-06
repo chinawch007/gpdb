@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <signal.h>
 #include <unistd.h>
+#include <sys/epoll.h>
 
 #include "access/printtup.h"
 #include "access/timeline.h"
@@ -69,10 +70,16 @@ PGconn* conns[MAX_SEGMENTS_COUNT + 1];
 char* ports[MAX_SEGMENTS_COUNT + 1];
 int cnt_conns = 0;
 
+struct epoll_event  ev_in[MAX_SEGMENTS_COUNT + 1];
+struct epoll_event  ev_out[MAX_SEGMENTS_COUNT + 1];
+
 bool CONN_INITED = false;
 
 PGconn* snapshot_conn = NULL;
 char* snapshot[100];
+
+#define READ_BUF_LEN 100
+char read_buf[READ_BUF_LEN];
 
 static void //正常是需要获取地址加port的，这里暂时只处理port
 GetPorts()
@@ -433,6 +440,95 @@ StartLogicalReplication(StartReplicationCmd *cmd)//理论上我要给controller�
 	fprintf(f, "command:%s\n", query);
 
 	DispatchCommand(query, PGRES_COPY_BOTH);
+
+	int efd = epoll_create(MAX_SEGMENTS_COUNT + 1);
+	if(efd <= 0)
+	{
+		fprintf(f, "epoll_create error:%d\n", errno);
+		fclose(f);
+		return;
+	}
+
+	for (int i = 0; i < cnt_conns; ++i)
+	{
+		int sock = PQsocket(conns[i]);
+		fprintf(f, "sock:%d\n", sock);
+
+		ev_in[i].events   = EPOLLIN | EPOLLET;
+		ev_in[i].data.fd  = sock;
+
+		int ret = epoll_ctl(efd, EPOLL_CTL_ADD, sock, &ev_in[i]);
+		fprintf(f, "epoll_ctl ret:%d, errno:%d\n", ret, errno);
+		fflush(f);
+		if (ret < 0)
+		{
+    		fprintf(f, "epoll_ctl error:%d, %dth sock, sock:%d\n", errno, i, sock);
+			fclose(f);
+			return;
+		}
+	}
+
+	fprintf(f, "before loop\n");
+
+	while(1)
+	{
+		int wait_count;
+		bool first_time = true;
+		do
+		{
+			if(!first_time)
+			{
+				fprintf(f, "epoll_wait failed because of EINTR\n");
+				fflush(f);
+			}
+    		wait_count = epoll_wait(efd, ev_out, MAX_SEGMENTS_COUNT + 1, -1);
+			first_time = false;
+		} while (wait_count < 0 && errno == EINTR);
+
+		if(wait_count < 0)
+		{
+			fprintf(f, "epoll_wait failed, errno:%d\n", errno);
+			fclose(f);
+			return;
+		}
+
+		fprintf(f, "epoll_wait get %d event\n", wait_count);
+
+		for(int i = 0; i < wait_count; ++i)
+		{
+			int fd = ev_out[i].data.fd;
+			int event = ev_out[i].events;
+			fprintf(f, "wait fd:%d, event:%d\n", fd, event);
+			int len = 0;
+
+			while(1)
+			{
+				int read_len = read(fd, read_buf+len, READ_BUF_LEN);
+
+				fprintf(f, "read fd:%d ret:%d\n", fd, read_len);
+
+				if (-1 == read_len)
+				{
+					if (EAGAIN != errno)
+					{
+						fprintf(f, "read error:%d\n", errno);
+					}
+					break;
+				} else if (!read_len)
+				{
+					break;
+				}
+				len += read_len;
+			}
+
+			fprintf(f, "readbuf:");
+			for(int i = 0; i < len; ++i)
+			{
+				fprintf(f, "%c", read_buf[i]);
+			}
+			fprintf(f, "\n");
+		}
+	}
 
 	fclose(f);
 }
