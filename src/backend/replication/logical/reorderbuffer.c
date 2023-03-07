@@ -1434,7 +1434,7 @@ void
 ReorderBufferCommit(ReorderBuffer *rb, TransactionId xid,
 					XLogRecPtr commit_lsn, XLogRecPtr end_lsn,
 					TimestampTz commit_time,
-					RepOriginId origin_id, XLogRecPtr origin_lsn)
+					RepOriginId origin_id, XLogRecPtr origin_lsn, DistributedTransactionId gxid,  bool is_one_phase)
 {
 	ReorderBufferTXN *txn;
 	volatile Snapshot snapshot_now;
@@ -1475,6 +1475,9 @@ ReorderBufferCommit(ReorderBuffer *rb, TransactionId xid,
 
 	/* setup the initial snapshot */
 	SetupHistoricSnapshot(snapshot_now, txn->tuplecid_hash);
+
+	txn->gxid = gxid;
+	txn->is_one_phase = is_one_phase;
 
 	/*
 	 * Decoding needs access to syscaches et al., which in turn use
@@ -1582,7 +1585,7 @@ ReorderBufferCommit(ReorderBuffer *rb, TransactionId xid,
 					if (!IsToastRelation(relation))
 					{
 						ReorderBufferToastReplace(rb, txn, relation, change);
-						rb->apply_change(rb, txn, relation, change);
+						rb->apply_change(rb, txn, relation, change);//原来如此。。。也是在commit回调时才有的
 
 						/*
 						 * Only clear reassembled toast chunks if we're sure
@@ -1838,6 +1841,11 @@ ReorderBufferCommit(ReorderBuffer *rb, TransactionId xid,
 		PG_RE_THROW();
 	}
 	PG_END_TRY();
+}
+
+void
+ReorderBufferDistributedForget(ReorderBuffer *rb, DistributedTransactionId gxid, int cnt_segments, int* segment_ids) {
+	rb->distributed_forget(rb, gxid, cnt_segments, segment_ids);
 }
 
 /*

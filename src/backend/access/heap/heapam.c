@@ -2054,6 +2054,9 @@ heap_insert(Relation relation, HeapTuple tup, CommandId cid,
 			bufflags |= REGBUF_KEEP_DATA;
 		}
 
+		xlrec.gxid = get_gxid();
+		xlrec.segment_id = GpIdentity.segindex;
+
 		XLogBeginInsert();
 		XLogRegisterData((char *) &xlrec, SizeOfHeapInsert);
 
@@ -2863,6 +2866,13 @@ l1:
 			else
 				xlrec.flags |= XLH_DELETE_CONTAINS_OLD_KEY;
 		}
+
+		xlrec.gxid = get_gxid();
+		xlrec.segment_id = GpIdentity.segindex;
+
+		FILE* f = fopen("/home/gpadmin/wangchonglog", "a");
+		fprintf(f, "in heap_delete, gxid:%d, segmentid:%d\n", xlrec.gxid, xlrec.segment_id);
+		fclose(f);
 
 		XLogBeginInsert();
 		XLogRegisterData((char *) &xlrec, SizeOfHeapDelete);
@@ -7438,6 +7448,13 @@ log_heap_update(Relation reln, Buffer oldbuf,
 
 	/* Caller should not call me on a non-WAL-logged relation */
 	Assert(RelationNeedsWAL(reln));
+
+	xlrec.gxid = get_gxid();
+	xlrec.segment_id = GpIdentity.segindex;
+
+	FILE* f = fopen("/home/gpadmin/wangchonglog", "a");
+	fprintf(f, "in log_heap_update, gxid:%d, segmentid:%d\n", xlrec.gxid, xlrec.segment_id);
+	fclose(f);
 
 	XLogBeginInsert();
 

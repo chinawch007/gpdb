@@ -102,6 +102,8 @@
 /* This is what we need to know about delete */
 typedef struct xl_heap_delete
 {
+	DistributedTransactionId gxid;
+	int segment_id;
 	TransactionId xmax;			/* xmax of the deleted tuple */
 	OffsetNumber offnum;		/* deleted tuple's offset */
 	uint8		infobits_set;	/* infomask bits */
@@ -151,6 +153,8 @@ typedef struct xl_heap_header
 /* This is what we need to know about insert */
 typedef struct xl_heap_insert
 {
+	DistributedTransactionId gxid;
+	int segment_id;
 	OffsetNumber offnum;		/* inserted tuple's offset */
 	uint8		flags;
 
@@ -209,6 +213,8 @@ typedef struct xl_multi_insert_tuple
  */
 typedef struct xl_heap_update
 {
+	DistributedTransactionId gxid;
+	int segment_id;
 	TransactionId old_xmax;		/* xmax of the old tuple */
 	OffsetNumber old_offnum;	/* old tuple's offset */
 	uint8		old_infobits_set;	/* infomask bits to set on old tuple */

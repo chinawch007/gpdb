@@ -68,6 +68,7 @@
 #include "replication/logicalworker.h"
 #include "replication/slot.h"
 #include "replication/walsender.h"
+#include "replication/walsendercontroller.h"
 #include "rewrite/rewriteHandler.h"
 #include "storage/bufmgr.h"
 #include "storage/ipc.h"
@@ -230,6 +231,11 @@ static MemoryContext row_description_context = NULL;
 static StringInfoData row_description_buf;
 
 static DtxContextInfo TempDtxContextInfo = DtxContextInfo_StaticInit;
+
+DistributedTransactionId get_gxid()
+{
+	return TempDtxContextInfo.distributedXid;
+}
 
 /* ----------------------------------------------------------------
  *		decls for routines only used in this file
@@ -5344,6 +5350,11 @@ PostgresMain(int argc, char *argv[],
 						if (!exec_replication_command(query_string))
 							exec_simple_query(query_string);
 					}
+					else if (am_walsender_controller)
+					{
+						if (!exec_walsendercontroller_command(query_string))
+							exec_simple_query(query_string);
+					}
 					else if (am_ftshandler)
 						HandleFtsMessage(query_string);
 					else if (am_faulthandler)
@@ -5797,6 +5808,17 @@ PostgresMain(int argc, char *argv[],
 				break;
 
 			case 'd':			/* copy data */
+				if (am_walsender_controller)
+				{
+					/*
+					if (!exec_walsendercontroller_command(query_string))
+						exec_simple_query(query_string);
+					*/
+					char* query_string = pq_getmsgstring(&input_message);
+					FILE* f = fopen("/home/gpadmin/wangchonglog", "a");
+					fprintf(f, "recv d msg:%s\n", query_string);
+					break;
+				}
 			case 'c':			/* copy done */
 			case 'f':			/* copy fail */
 

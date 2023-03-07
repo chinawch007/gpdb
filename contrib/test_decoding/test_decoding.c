@@ -22,6 +22,10 @@
 #include "utils/memutils.h"
 #include "utils/rel.h"
 
+#include "unistd.h"
+
+#include "cdb/cdbvars.h"
+
 PG_MODULE_MAGIC;
 
 /* These must be available to pg_dlsym() */
@@ -63,6 +67,9 @@ static void pg_decode_message(LogicalDecodingContext *ctx,
 							  bool transactional, const char *prefix,
 							  Size sz, const char *message);
 
+static void pg_decode_distributed_forget(LogicalDecodingContext *ctx,
+										 DistributedTransactionId gxid, int cnt_segments, int* segment_ids);
+
 void
 _PG_init(void)
 {
@@ -83,6 +90,8 @@ _PG_output_plugin_init(OutputPluginCallbacks *cb)
 	cb->filter_by_origin_cb = pg_decode_filter;
 	cb->shutdown_cb = pg_decode_shutdown;
 	cb->message_cb = pg_decode_message;
+
+	cb->distributed_forget_cb = pg_decode_distributed_forget;
 }
 
 
@@ -244,11 +253,63 @@ pg_decode_commit_txn(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 	else
 		appendStringInfoString(ctx->out, "COMMIT");
 
+	if(txn->is_one_phase)
+	{
+		appendStringInfo(ctx->out, " ONE_PHASE");
+	}
+
+	appendStringInfo(ctx->out, " gxid:%ld", txn->gxid);
+	appendStringInfo(ctx->out, " segmentid:%d", GpIdentity.segindex);
+
 	if (data->include_timestamp)
 		appendStringInfo(ctx->out, " (at %s)",
 						 timestamptz_to_str(txn->commit_time));
 
+	FILE* f = fopen("/home/gpadmin/wangchonglog", "a");
+	for(int i = 0; i < ctx->out->len; ++i)
+	{
+		fprintf(f, "%c", ctx->out->data[i]);
+	}
+	fprintf(f, "\n");
+	fclose(f);
+
 	OutputPluginWrite(ctx, true);
+}
+
+static void pg_decode_distributed_forget(LogicalDecodingContext *ctx,
+										 DistributedTransactionId gxid, int cnt_segments, int* segment_ids)
+{
+	TestDecodingData *data = ctx->output_plugin_private;
+
+	FILE* f = fopen("/home/gpadmin/wangchonglog", "a");
+
+	//这两行可别对我们造成什么影响
+	data->xact_wrote_changes = false;
+	if (data->skip_empty_xacts)
+		return;
+
+	//这里我就跟上边保持一样了，理论上不会有
+	OutputPluginPrepareWrite(ctx, true);//推测2参是本次调用这里是否是最后一写。
+	
+	appendStringInfo(ctx->out, "DISTRIBUTED FORGET %ld ", gxid);	
+	
+	for(int i = 0; i < cnt_segments-1; ++i)
+	{
+		appendStringInfo(ctx->out, "segment %d,", segment_ids[i]);
+	}
+	appendStringInfo(ctx->out, "segment %d", segment_ids[cnt_segments-1]);
+	
+
+	for(int i = 0; i < ctx->out->len; ++i)
+	{
+		fprintf(f, "%c", ctx->out->data[i]);
+	}
+	fprintf(f, "\n");
+	//fprintf(f, "%s\n", ctx->out->data);
+
+	OutputPluginWrite(ctx, true);
+
+	fclose(f);
 }
 
 static bool
@@ -312,6 +373,120 @@ print_literal(StringInfo s, Oid typid, char *outputstr)
 			appendStringInfoChar(s, '\'');
 			break;
 	}
+}
+
+/* print the tuple 'tuple' into the StringInfo s */
+static void
+tuple_to_kafka_value(StringInfo s, TupleDesc tupdesc, HeapTuple tuple, bool skip_nulls)
+{
+	int			natt;
+
+	/* print all columns individually */
+	for (natt = 0; natt < tupdesc->natts; natt++)
+	{
+		Form_pg_attribute attr; /* the attribute itself */
+		Oid			typid;		/* type of current attribute */
+		Oid			typoutput;	/* output function */
+		bool		typisvarlena;
+		Datum		origval;	/* possibly toasted Datum */
+		bool		isnull;		/* column is null? */
+
+		attr = TupleDescAttr(tupdesc, natt);
+
+		/*
+		 * don't print dropped columns, we can't be sure everything is
+		 * available for them
+		 */
+		if (attr->attisdropped)
+			continue;
+
+		/*
+		 * Don't print system columns, oid will already have been printed if
+		 * present.
+		 */
+		if (attr->attnum < 0)
+			continue;
+
+		typid = attr->atttypid;
+
+		/* get Datum from tuple */
+		origval = heap_getattr(tuple, natt + 1, tupdesc, &isnull);
+
+		if (isnull && skip_nulls)
+			continue;
+
+		/* print attribute name */
+		appendStringInfoString(s, quote_identifier(NameStr(attr->attname)));
+
+		/* print attribute type */
+		appendStringInfoString(s, "<*>");
+		appendStringInfoString(s, format_type_be(typid));
+		appendStringInfoString(s, "<*>");
+
+		/* query output function */
+		getTypeOutputInfo(typid,
+						  &typoutput, &typisvarlena);
+
+		/* print data */
+		if (isnull)
+			appendStringInfoString(s, "null");
+		else if (typisvarlena && VARATT_IS_EXTERNAL_ONDISK(origval))
+			appendStringInfoString(s, "unchanged-toast-datum");
+		else if (!typisvarlena)
+			print_literal(s, typid,
+						  OidOutputFunctionCall(typoutput, origval));
+		else
+		{
+			Datum		val;	/* definitely detoasted Datum */
+
+			val = PointerGetDatum(PG_DETOAST_DATUM(origval));
+			print_literal(s, typid, OidOutputFunctionCall(typoutput, val));
+		}
+		appendStringInfoString(s, "<*>");
+	}
+}
+
+static StringInfo get_delimited_data(Relation relation, ReorderBufferChange *change, ReorderBufferTXN *txn)
+{
+	StringInfo sendKafkaValue = makeStringInfo();
+	Form_pg_class class_form = RelationGetForm(relation);
+	TupleDesc tupdesc = RelationGetDescr(relation);
+
+	// append scheme and table info
+	appendStringInfoString(sendKafkaValue,
+						   quote_qualified_identifier(
+													  get_namespace_name(
+																		 get_rel_namespace(RelationGetRelid(relation))),
+													  class_form->relrewrite ?
+													  get_rel_name(class_form->relrewrite) :
+													  NameStr(class_form->relname)));
+	appendStringInfoString(sendKafkaValue, "<*>");
+
+	// append action
+	if (change->action == REORDER_BUFFER_CHANGE_INSERT)
+	{
+		appendStringInfoString(sendKafkaValue, "insert<*>");
+	}
+	else if (change->action == REORDER_BUFFER_CHANGE_UPDATE)
+	{
+		appendStringInfoString(sendKafkaValue, "update<*>");
+	}
+	else if (change->action == REORDER_BUFFER_CHANGE_DELETE)
+	{
+		appendStringInfoString(sendKafkaValue, "delete<*>");
+	}
+
+	appendStringInfo(sendKafkaValue, "%X", txn->final_lsn);
+	appendStringInfoString(sendKafkaValue, "<*>");
+
+	// append data
+	if (change->data.tp.newtuple == NULL)
+		appendStringInfoString(sendKafkaValue, " (no-tuple-data)");
+	else
+		tuple_to_kafka_value(sendKafkaValue, tupdesc,
+							&change->data.tp.newtuple->tuple,
+							false);
+	return sendKafkaValue;
 }
 
 /* print the tuple 'tuple' into the StringInfo s */
@@ -417,6 +592,9 @@ pg_decode_change(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 
 	OutputPluginPrepareWrite(ctx, true);
 
+	appendStringInfo(ctx->out, "gxid:%lld ", change->gxid);
+	appendStringInfo(ctx->out, "segmentid:%d ", change->segment_id);
+
 	appendStringInfoString(ctx->out, "table ");
 	appendStringInfoString(ctx->out,
 						   quote_qualified_identifier(
@@ -474,6 +652,16 @@ pg_decode_change(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 
 	MemoryContextSwitchTo(old);
 	MemoryContextReset(data->context);
+
+	//StringInfo sendKafkaValue = get_delimited_data(relation, change, txn);
+
+	FILE* f = fopen("/home/gpadmin/wangchonglog", "a");
+	for(int i = 0; i < ctx->out->len; ++i)
+	{
+		fprintf(f, "%c", ctx->out->data[i]);
+	}
+	fprintf(f, "\n");
+	fclose(f);
 
 	OutputPluginWrite(ctx, true);
 }

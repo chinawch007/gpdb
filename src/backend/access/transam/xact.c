@@ -1797,9 +1797,21 @@ RecordDistributedForgetCommitted(DistributedTransactionId gxid)
 	xl_xact_distributed_forget xlrec;
 
 	xlrec.gxid = gxid;
+	xlrec.cnt_segments = list_length(MyTmGxactLocal->dtxSegments);
+	int segment_ids[100];//for now
+
+	ListCell *lc = NULL;
+	int i = 0;
+	foreach_with_count(lc, MyTmGxactLocal->dtxSegments, i)
+	{
+		segment_ids[i] = lfirst_int(lc);
+	}
 
 	XLogBeginInsert();
-	XLogRegisterData((char *) &xlrec, sizeof(xl_xact_distributed_forget));
+	//XLogRegisterData((char *) &xlrec, sizeof(xl_xact_distributed_forget));
+	XLogRegisterData((char *) &xlrec, MinSizeOfXactDistributedForget);
+	XLogRegisterData((char *) segment_ids,
+						 (xlrec.cnt_segments) * sizeof(int));
 
 	XLogInsert(RM_XACT_ID, XLOG_XACT_DISTRIBUTED_FORGET);
 }
@@ -2326,6 +2338,12 @@ SetSharedTransactionId_reader(FullTransactionId xid, CommandId cid, DtxContext d
 static void
 StartTransaction(void)
 {
+	if (Gp_role == GP_ROLE_DISPATCH)
+	{
+		LWLockAcquire(StartTransactionLock, LW_SHARED);
+		LWLockRelease(StartTransactionLock);
+	}
+
 	TransactionState s;
 	VirtualTransactionId vxid;
 
@@ -6836,10 +6854,18 @@ XactLogCommitRecord(TimestampTz commit_time,
 		xl_origin.origin_timestamp = replorigin_session_origin_timestamp;
 	}
 
-	if (isDtxPrepared || isOnePhaseQE)
+	if (isDtxPrepared || isOnePhaseQE || info == XLOG_XACT_COMMIT_PREPARED)
 	{
 		xl_xinfo.xinfo |= XACT_XINFO_HAS_DISTRIB;
 		xl_distrib.distrib_xid = getDistributedTransactionId();
+		if (isOnePhaseQE)
+		{
+			xl_distrib.is_one_phase = true;
+		}
+		else
+		{
+			xl_distrib.is_one_phase = false;
+		}
 	}
 
 	if (xl_xinfo.xinfo != 0)
