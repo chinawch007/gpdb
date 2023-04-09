@@ -1479,6 +1479,7 @@ resetTmGxact(void)
 	MyTmGxactLocal->explicitBeginRemembered = false;
 	MyTmGxactLocal->writerGangLost = false;
 	MyTmGxactLocal->dtxSegmentsMap = NULL;
+	MyTmGxactLocal->dtxSegmentsWroteLog = NULL;
 	MyTmGxactLocal->dtxSegments = NIL;
 	MyTmGxactLocal->isOnePhaseCommit = false;
 	if (MyTmGxactLocal->waitGxids != NULL)

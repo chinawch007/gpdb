@@ -165,6 +165,9 @@ typedef struct ReorderBufferTXN
 	bool		is_known_as_subxact;
 	TransactionId toplevel_xid;
 
+	DistributedTransactionId gxid;
+	bool 		is_one_phase;
+
 	/*
 	 * LSN of the first data carrying, WAL record with knowledge about this
 	 * xid. This is allowed to *not* be first record adorned with this xid, if
@@ -408,7 +411,8 @@ void		ReorderBufferQueueMessage(ReorderBuffer *, TransactionId, Snapshot snapsho
 									  Size message_size, const char *message);
 void		ReorderBufferCommit(ReorderBuffer *, TransactionId,
 								XLogRecPtr commit_lsn, XLogRecPtr end_lsn,
-								TimestampTz commit_time, RepOriginId origin_id, XLogRecPtr origin_lsn);
+								TimestampTz commit_time, RepOriginId origin_id, XLogRecPtr origin_lsn,
+								DistributedTransactionId gxid,  bool is_one_phase);
 void		ReorderBufferAssignChild(ReorderBuffer *, TransactionId, TransactionId, XLogRecPtr commit_lsn);
 void		ReorderBufferCommitChild(ReorderBuffer *, TransactionId, TransactionId,
 									 XLogRecPtr commit_lsn, XLogRecPtr end_lsn);

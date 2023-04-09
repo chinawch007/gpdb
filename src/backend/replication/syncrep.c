@@ -861,7 +861,8 @@ SyncRepGetCandidateStandbys(SyncRepStandbyData **standbys)
 			if ((walsnd->pid != 0)
 				&& ((walsnd->state == WALSNDSTATE_STREAMING)
 					|| (walsnd->state == WALSNDSTATE_CATCHUP &&
-						walsnd->caughtup_within_range)))
+						walsnd->caughtup_within_range))
+				&& walsnd->sync_standby_priority != 0)
 			{
 				stby->walsnd_index = i;
 				stby->pid = walsnd->pid;
