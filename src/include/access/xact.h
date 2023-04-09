@@ -184,6 +184,7 @@ typedef void (*SubXactCallback) (SubXactEvent event, SubTransactionId mySubid,
 #define XACT_XINFO_HAS_GID				(1U << 7)
 #define XACT_XINFO_HAS_DISTRIB			(1U << 8)
 #define XACT_XINFO_HAS_DELDBS			(1U << 9)
+#define XACT_XINFO_HAS_IS_ONE_PHASE		(1U << 10)
 
 /*
  * Also stored in xinfo, these indicating a variety of additional actions that
@@ -245,6 +246,20 @@ typedef struct xl_xact_distrib
 {
 	DistributedTransactionId distrib_xid;
 } xl_xact_distrib;
+
+/*
+ * We can put 'is_one_phase' into 'xl_xact_distrib', perhaps it's a better way,
+ * but then 'is_one_phase' will be writen to xlog in every wal_level.
+ * For now we only need writing 'is_one_phase' to xlog when wal_level >= logical.
+*/
+typedef struct xl_xact_isonephase
+{
+	/* 
+	 * Whether this is a one-phase distributed transaction. 
+	 * Int type for alignment, 1 represent yes.
+	 */
+	int is_one_phase;			
+} xl_xact_isonephase;
 
 typedef struct xl_xact_dbinfo
 {
@@ -361,6 +376,8 @@ typedef struct xl_xact_parsed_commit
 	TimestampTz origin_timestamp;
 
 	DistributedTransactionId        distribXid;
+
+	bool is_one_phase;
 } xl_xact_parsed_commit;
 
 typedef xl_xact_parsed_commit xl_xact_parsed_prepare;
