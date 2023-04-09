@@ -1791,13 +1791,36 @@ void
 RecordDistributedForgetCommitted(DistributedTransactionId gxid)
 {
 	xl_xact_distributed_forget xlrec;
+	xl_xact_xinfo xl_xinfo;
+	xl_xact_nsegs xl_nsegs;
+
+	xl_xinfo.xinfo = 0;
+	uint8		info = XLOG_XACT_DISTRIBUTED_FORGET;
 
 	xlrec.gxid = gxid;
 
+	if (XLogLogicalInfoActive())
+	{
+		xl_xinfo.xinfo |= XACT_XINFO_HAS_NSEGS;
+		xl_nsegs.nsegs = list_length(MyTmGxactLocal->dtxSegments);
+	}
+
+	if (xl_xinfo.xinfo != 0)
+		info |= XLOG_XACT_HAS_INFO;
+
 	XLogBeginInsert();
+
 	XLogRegisterData((char *) &xlrec, sizeof(xl_xact_distributed_forget));
 
-	XLogInsert(RM_XACT_ID, XLOG_XACT_DISTRIBUTED_FORGET);
+	if (xl_xinfo.xinfo != 0)
+		XLogRegisterData((char *) (&xl_xinfo.xinfo), sizeof(xl_xinfo.xinfo));
+
+	if (xl_xinfo.xinfo & XACT_XINFO_HAS_NSEGS)
+	{
+		XLogRegisterData((char *) (&xl_nsegs), sizeof(xl_xact_nsegs));
+	}
+
+	XLogInsert(RM_XACT_ID, info);
 }
 
 /*

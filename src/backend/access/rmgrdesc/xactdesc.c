@@ -254,6 +254,30 @@ ParseAbortRecord(uint8 info, xl_xact_abort *xlrec, xl_xact_parsed_abort *parsed)
 
 }
 
+void
+ParseDistributedForgetRecord(uint8 info, xl_xact_distributed_forget *xlrec, xl_xact_parsed_distributed_forget *parsed)
+{
+	char* data = ((char *) xlrec) + MinSizeOfXactDistributedForget;
+
+	int xinfo = 0;
+	parsed->gxid = xlrec->gxid;
+
+	if (info & XLOG_XACT_HAS_INFO)
+	{
+		xl_xact_xinfo *xl_xinfo = (xl_xact_xinfo *) data;
+
+		xinfo = xl_xinfo->xinfo;
+
+		data += sizeof(xl_xact_xinfo);
+	}
+
+	if (xinfo & XACT_XINFO_HAS_NSEGS)
+	{
+		xl_xact_nsegs *xl_nsegs = (xl_xact_nsegs *) data;
+		parsed->nsegs = xl_nsegs->nsegs;
+	}
+}
+
 static void
 xact_desc_commit(StringInfo buf, uint8 info, xl_xact_commit *xlrec, RepOriginId origin_id)
 {
