@@ -73,6 +73,8 @@ static void DecodeCommit(LogicalDecodingContext *ctx, XLogRecordBuffer *buf,
 						 xl_xact_parsed_commit *parsed, TransactionId xid);
 static void DecodeAbort(LogicalDecodingContext *ctx, XLogRecordBuffer *buf,
 						xl_xact_parsed_abort *parsed, TransactionId xid);
+static void DecodeDistributedForget(LogicalDecodingContext *ctx,
+			                        xl_xact_parsed_distributed_forget *parsed);
 
 /* common function to decode tuples */
 static void DecodeXLogTuple(char *data, Size len, ReorderBufferTupleBuf *tup);
@@ -308,6 +310,22 @@ DecodeXactOp(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
 			 */
 			ReorderBufferProcessXid(reorder, XLogRecGetXid(r), buf->origptr);
 			break;
+		case XLOG_XACT_DISTRIBUTED_COMMIT:
+			{
+				//do nothing
+				break;
+			}
+		case XLOG_XACT_DISTRIBUTED_FORGET:
+			{
+				xl_xact_distributed_forget *xlrec;
+				xl_xact_parsed_distributed_forget parsed;
+
+				xlrec = (xl_xact_distributed_forget *) XLogRecGetData(r);
+				ParseDistributedForgetRecord(XLogRecGetInfo(buf->record), xlrec, &parsed);
+
+				DecodeDistributedForget(ctx, &parsed);
+				break;
+			}
 		default:
 			elog(ERROR, "unexpected RM_XACT_ID record type: %u", info);
 	}
@@ -671,6 +689,18 @@ DecodeAbort(LogicalDecodingContext *ctx, XLogRecordBuffer *buf,
 	}
 
 	ReorderBufferAbort(ctx->reorder, xid, buf->record->EndRecPtr);
+}
+
+/*
+ * Parse XLOG_XACT_DISTRIBUTED_FORGET records.
+ * Handling 'xl_xact_parsed_distributed_forget' needn't get through ReorderBuffer,
+ * so we directly call '*_cb_wrapper' in logical.c
+ */
+static void
+DecodeDistributedForget(LogicalDecodingContext *ctx,
+                        xl_xact_parsed_distributed_forget *parsed)
+{
+	distributed_forget_cb_wrapper(ctx, parsed->gxid, parsed->nsegs);
 }
 
 /*

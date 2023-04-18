@@ -878,6 +878,14 @@ message_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
 	error_context_stack = errcallback.previous;
 }
 
+void distributed_forget_cb_wrapper(LogicalDecodingContext *ctx, DistributedTransactionId gxid, int nsegs)
+{
+
+	ctx->accept_writes = true;
+	/* do the actual work: call callback */
+	ctx->callbacks.distributed_forget_cb(ctx, gxid, nsegs);
+}
+
 /*
  * Set the required catalog xmin horizon for historic snapshots in the current
  * replication slot.

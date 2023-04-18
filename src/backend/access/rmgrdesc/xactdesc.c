@@ -267,14 +267,15 @@ ParseDistributedForgetRecord(uint8 info, xl_xact_distributed_forget *xlrec, xl_x
 		xl_xact_xinfo *xl_xinfo = (xl_xact_xinfo *) data;
 
 		xinfo = xl_xinfo->xinfo;
-
 		data += sizeof(xl_xact_xinfo);
 	}
 
 	if (xinfo & XACT_XINFO_HAS_NSEGS)
 	{
 		xl_xact_nsegs *xl_nsegs = (xl_xact_nsegs *) data;
+
 		parsed->nsegs = xl_nsegs->nsegs;
+		data += sizeof(xl_xact_nsegs);
 	}
 }
 
