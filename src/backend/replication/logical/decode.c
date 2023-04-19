@@ -669,7 +669,7 @@ DecodeCommit(LogicalDecodingContext *ctx, XLogRecordBuffer *buf,
 
 	/* replay actions of all transaction + subtransactions in order */
 	ReorderBufferCommit(ctx->reorder, xid, buf->origptr, buf->endptr,
-						commit_time, origin_id, origin_lsn);
+						commit_time, origin_id, origin_lsn, parsed->distribXid, parsed->is_one_phase);
 }
 
 /*
