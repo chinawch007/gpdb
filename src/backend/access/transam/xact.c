@@ -1802,7 +1802,7 @@ RecordDistributedForgetCommitted(DistributedTransactionId gxid)
 	if (XLogLogicalInfoActive())
 	{
 		xl_xinfo.xinfo |= XACT_XINFO_HAS_NSEGS;
-		xl_nsegs.nsegs = list_length(MyTmGxactLocal->dtxSegments);
+		xl_nsegs.nsegs = bms_num_members(MyTmGxactLocal->dtxSegmentsWroteLog);
 	}
 
 	if (xl_xinfo.xinfo != 0)

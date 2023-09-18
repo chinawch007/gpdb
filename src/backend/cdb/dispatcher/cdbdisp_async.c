@@ -1102,6 +1102,17 @@ processResults(CdbDispatchResult *dispatchResult)
 			 * always mark current top transaction has wrote xlog on executor.
 			 */
 			segdbDesc->conn->wrote_xlog = false;
+
+			if(MyTmGxactLocal->state == DTX_STATE_ACTIVE_DISTRIBUTED)
+			{
+				if(!bms_is_member(segdbDesc->segindex, MyTmGxactLocal->dtxSegmentsWroteLog))
+				{
+					MemoryContext oldContext = MemoryContextSwitchTo(TopTransactionContext);
+					MyTmGxactLocal->dtxSegmentsWroteLog =
+						bms_add_member(MyTmGxactLocal->dtxSegmentsWroteLog, segdbDesc->segindex);
+					MemoryContextSwitchTo(oldContext);
+				}
+			}
 		}
 
 		/*
