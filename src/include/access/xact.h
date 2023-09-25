@@ -435,6 +435,8 @@ typedef struct xl_xact_parsed_distributed_forget
 {
 	DistributedTransactionId gxid;
 	int nsegs;
+	Oid			dbId;			/* MyDatabaseId */
+	Oid			tsId;			/* MyDatabaseTableSpace */
 } xl_xact_parsed_distributed_forget;
 
 /* ----------------

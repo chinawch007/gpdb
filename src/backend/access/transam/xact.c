@@ -1793,6 +1793,7 @@ RecordDistributedForgetCommitted(DistributedTransactionId gxid)
 	xl_xact_distributed_forget xlrec;
 	xl_xact_xinfo xl_xinfo;
 	xl_xact_nsegs xl_nsegs;
+	xl_xact_dbinfo xl_dbinfo;
 
 	xl_xinfo.xinfo = 0;
 	uint8		info = XLOG_XACT_DISTRIBUTED_FORGET;
@@ -1803,6 +1804,10 @@ RecordDistributedForgetCommitted(DistributedTransactionId gxid)
 	{
 		xl_xinfo.xinfo |= XACT_XINFO_HAS_NSEGS;
 		xl_nsegs.nsegs = bms_num_members(MyTmGxactLocal->dtxSegmentsWroteLog);
+
+		xl_xinfo.xinfo |= XACT_XINFO_HAS_DBINFO;
+		xl_dbinfo.dbId = MyDatabaseId;
+		xl_dbinfo.tsId = MyDatabaseTableSpace;
 	}
 
 	if (xl_xinfo.xinfo != 0)
@@ -1819,6 +1824,9 @@ RecordDistributedForgetCommitted(DistributedTransactionId gxid)
 	{
 		XLogRegisterData((char *) (&xl_nsegs), sizeof(xl_xact_nsegs));
 	}
+
+	if (xl_xinfo.xinfo & XACT_XINFO_HAS_DBINFO)
+		XLogRegisterData((char *) (&xl_dbinfo), sizeof(xl_dbinfo));
 
 	XLogInsert(RM_XACT_ID, info);
 }

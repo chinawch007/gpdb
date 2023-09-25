@@ -700,6 +700,11 @@ static void
 DecodeDistributedForget(LogicalDecodingContext *ctx,
                         xl_xact_parsed_distributed_forget *parsed)
 {
+	if(parsed->dbId != ctx->slot->data.database)
+	{
+		return;
+	}
+
 	distributed_forget_cb_wrapper(ctx, parsed->gxid, parsed->nsegs);
 }
 
