@@ -43,6 +43,7 @@
 #include "storage/procarray.h"
 
 #include "utils/memutils.h"
+#include "cdb/cdbvars.h"
 
 /* data for errcontext callback */
 typedef struct LogicalErrorCallbackState
@@ -878,10 +879,11 @@ message_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
 	error_context_stack = errcallback.previous;
 }
 
-void distributed_forget_cb_wrapper(LogicalDecodingContext *ctx, DistributedTransactionId gxid, int nsegs)
+void distributed_forget_cb_wrapper(LogicalDecodingContext *ctx, DistributedTransactionId gxid, int nsegs, XLogRecPtr lsn)
 {
 
 	ctx->accept_writes = true;
+	ctx->write_location = lsn;
 	/* do the actual work: call callback */
 	ctx->callbacks.distributed_forget_cb(ctx, gxid, nsegs);
 }

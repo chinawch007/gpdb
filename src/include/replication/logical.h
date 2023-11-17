@@ -121,6 +121,6 @@ extern void LogicalConfirmReceivedLocation(XLogRecPtr lsn);
 
 extern bool filter_by_origin_cb_wrapper(LogicalDecodingContext *ctx, RepOriginId origin_id);
 
-extern void distributed_forget_cb_wrapper(LogicalDecodingContext *ctx, DistributedTransactionId gxid, int nsegs);
+extern void distributed_forget_cb_wrapper(LogicalDecodingContext *ctx, DistributedTransactionId gxid, int nsegs, XLogRecPtr lsn);
 
 #endif
