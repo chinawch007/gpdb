@@ -858,6 +858,11 @@ SyncRepGetCandidateStandbys(SyncRepStandbyData **standbys)
 
 		if (IS_QUERY_DISPATCHER())
 		{
+			if(i != 0)
+			{
+				SpinLockRelease(&walsnd->mutex);
+				continue;
+			}
 			if ((walsnd->pid != 0)
 				&& ((walsnd->state == WALSNDSTATE_STREAMING)
 					|| (walsnd->state == WALSNDSTATE_CATCHUP &&
