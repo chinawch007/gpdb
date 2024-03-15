@@ -74,7 +74,7 @@ static void DecodeCommit(LogicalDecodingContext *ctx, XLogRecordBuffer *buf,
 static void DecodeAbort(LogicalDecodingContext *ctx, XLogRecordBuffer *buf,
 						xl_xact_parsed_abort *parsed, TransactionId xid);
 static void DecodeDistributedForget(LogicalDecodingContext *ctx,
-									xl_xact_parsed_distributed_forget *parsed, XLogRecPtr start_lsn, XLogRecPtr end_lsn);
+						xl_xact_parsed_distributed_forget *parsed, XLogRecPtr start_lsn, XLogRecPtr end_lsn);
 
 /* common function to decode tuples */
 static void DecodeXLogTuple(char *data, Size len, ReorderBufferTupleBuf *tup);
@@ -313,7 +313,7 @@ DecodeXactOp(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
 			break;
 		case XLOG_XACT_DISTRIBUTED_COMMIT:
 			{
-				//do nothing
+				/* do nothing */
 				break;
 			}
 		case XLOG_XACT_DISTRIBUTED_FORGET:
@@ -668,9 +668,10 @@ DecodeCommit(LogicalDecodingContext *ctx, XLogRecordBuffer *buf,
 								 buf->origptr, buf->endptr);
 	}
 
+	SetCommitGxidAndOnePhase(ctx->reorder, xid, parsed->distribXid, parsed->is_one_phase);
 	/* replay actions of all transaction + subtransactions in order */
 	ReorderBufferCommit(ctx->reorder, xid, buf->origptr, buf->endptr,
-						commit_time, origin_id, origin_lsn, parsed->distribXid, parsed->is_one_phase);
+						commit_time, origin_id, origin_lsn);
 }
 
 /*
@@ -707,7 +708,9 @@ DecodeDistributedForget(LogicalDecodingContext *ctx,
 	 * logical decoding of each slot only targets a single database,
 	 * so it is necessary to filter out the logs of other databases.
 	 */
-	if(parsed->dbId != InvalidOid && parsed->dbId != ctx->slot->data.database)
+	if (parsed->dbId != InvalidOid && parsed->dbId != ctx->slot->data.database)
+		return;
+	if (SnapBuildXactNeedsSkip(ctx->snapshot_builder, start_lsn))
 		return;
 	distributed_forget_cb_wrapper(ctx, parsed->gxid, parsed->nsegs, start_lsn, end_lsn);
 }

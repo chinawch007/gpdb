@@ -103,7 +103,7 @@ typedef void (*LogicalDecodeShutdownCB) (struct LogicalDecodingContext *ctx);
  * Callback for the commit of distributed transaction.
 */
 typedef void (*LogicalDecodeDistributedForgetCB) (struct LogicalDecodingContext *ctx,
-									   			  DistributedTransactionId gxid, int nsegs);
+				DistributedTransactionId gxid, int nsegs, XLogRecPtr start_lsn);
 
 /*
  * Output plugin callbacks

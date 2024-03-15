@@ -421,7 +421,7 @@ typedef struct xl_xact_distributed_forget
 typedef struct xl_xact_parsed_distributed_forget
 {
 	DistributedTransactionId gxid;
-	int 		nsegs;			/* How many segments the distributed transaction is executed on */
+	int			nsegs;			/* How many segments the distributed transaction is executed on */
 	Oid			dbId;			/* MyDatabaseId */
 	Oid			tsId;			/* MyDatabaseTableSpace */
 } xl_xact_parsed_distributed_forget;

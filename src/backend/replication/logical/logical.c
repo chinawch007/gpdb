@@ -905,7 +905,7 @@ distributed_forget_cb_wrapper(LogicalDecodingContext *ctx, DistributedTransactio
 	ctx->write_location = end_lsn;
 
 	/* do the actual work: call callback */
-	ctx->callbacks.distributed_forget_cb(ctx, gxid, nsegs);
+	ctx->callbacks.distributed_forget_cb(ctx, gxid, nsegs, start_lsn);
 
 	/* Pop the error context stack */
 	error_context_stack = errcallback.previous;

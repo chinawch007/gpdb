@@ -1436,6 +1436,22 @@ ReorderBufferFreeSnap(ReorderBuffer *rb, Snapshot snap)
 		SnapBuildSnapDecRefcount(snap);
 }
 
+/* Set gxid and one_phase flag for commit transaction if any */
+void
+SetCommitGxidAndOnePhase(ReorderBuffer *rb, TransactionId xid, 
+		DistributedTransactionId gxid, bool is_one_phase)
+{
+	ReorderBufferTXN *txn;
+
+	txn = ReorderBufferTXNByXid(rb, xid, false, NULL, InvalidXLogRecPtr, false);
+
+	/* unknown transaction, nothing to set */
+	if (txn == NULL)
+		return;
+
+	txn->gxid = gxid;
+	txn->is_one_phase = is_one_phase;
+}
 /*
  * Perform the replay of a transaction and its non-aborted subtransactions.
  *
@@ -1453,8 +1469,7 @@ void
 ReorderBufferCommit(ReorderBuffer *rb, TransactionId xid,
 					XLogRecPtr commit_lsn, XLogRecPtr end_lsn,
 					TimestampTz commit_time,
-					RepOriginId origin_id, XLogRecPtr origin_lsn,
-					DistributedTransactionId gxid,  bool is_one_phase)
+					RepOriginId origin_id, XLogRecPtr origin_lsn)
 {
 	ReorderBufferTXN *txn;
 	volatile Snapshot snapshot_now;
@@ -1474,8 +1489,6 @@ ReorderBufferCommit(ReorderBuffer *rb, TransactionId xid,
 	txn->commit_time = commit_time;
 	txn->origin_id = origin_id;
 	txn->origin_lsn = origin_lsn;
-	txn->gxid = gxid;
-	txn->is_one_phase = is_one_phase;
 
 	/*
 	 * If this transaction has no snapshot, it didn't make any changes to the
