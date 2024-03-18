@@ -12,7 +12,7 @@ DECLARE
   -- Otherwise, a syntax error will occur. The same usage is used in other functions.
   buf text;
 BEGIN
-  SELECT pg_create_logical_replication_slot('regression_slot_p', 'test_distributed_decoding') INTO buf;
+  SELECT pg_create_logical_replication_slot('regression_slot_p', 'test_decoding') INTO buf;
 END;
 $$ language plpgsql;
 -- Create slot on coordinator and segments
@@ -20,7 +20,7 @@ CREATE OR REPLACE FUNCTION create_slot_on_all_segments() RETURNS void AS $$
 DECLARE
   buf text;
 BEGIN
-  SELECT pg_create_logical_replication_slot('regression_slot_p', 'test_distributed_decoding') INTO buf; -- create slot on coordinator
+  SELECT pg_create_logical_replication_slot('regression_slot_p', 'test_decoding') INTO buf; -- create slot on coordinator
   SELECT create_slot() FROM gp_dist_random('gp_id') INTO buf;
 END;
 $$ language plpgsql;
@@ -51,7 +51,7 @@ $$ language plpgsql;
 -- Use the 'pg_logical_slot_get_changes' command to get the decoded log content on one segment.
 -- Normally pg_logical_slot_get_changes will return 'BEGIN xid'.
 -- For one-phase transactions, a flag is added, returning 'ONE-PHASE,BEGIN xid'.
--- The specific implementation code is in the 'pg_output_begin' function of test_distributed_decoding.c.
+-- The specific implementation code is in the 'pg_output_begin' function of test_decoding.c.
 CREATE OR REPLACE FUNCTION get_change() RETURNS void AS $$
 DECLARE
   buf text;
@@ -80,30 +80,30 @@ BEGIN
 END;
 $$ language plpgsql;
 -- Start test
-SELECT 'init' FROM create_slot_on_all_segments();
- ?column? 
-----------
- init
+SELECT * FROM create_slot_on_all_segments();
+ create_slot_on_all_segments 
+-----------------------------
+ 
 (1 row)
 
-SELECT 'init' FROM execute_one_phase_transaction();
- ?column? 
-----------
- init
+SELECT * FROM execute_one_phase_transaction();
+ execute_one_phase_transaction 
+-------------------------------
+ 
 (1 row)
 
-SELECT 'init' FROM test_one_phase();
-NOTICE:  result match
- ?column? 
-----------
- init
+SELECT * FROM test_one_phase();
+NOTICE:  result match  (seg0 slice1 10.117.190.134:7002 pid=8837)
+ test_one_phase 
+----------------
+ 
 (1 row)
 
 -- Clean
-SELECT 'init' FROM drop_slot_on_all_segments();
- ?column? 
-----------
- init
+SELECT * FROM drop_slot_on_all_segments();
+ drop_slot_on_all_segments 
+---------------------------
+ 
 (1 row)
 
 DROP TABLE test_table;

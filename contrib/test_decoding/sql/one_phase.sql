@@ -14,7 +14,7 @@ DECLARE
   -- Otherwise, a syntax error will occur. The same usage is used in other functions.
   buf text;
 BEGIN
-  SELECT pg_create_logical_replication_slot('regression_slot_p', 'test_distributed_decoding') INTO buf;
+  SELECT pg_create_logical_replication_slot('regression_slot_p', 'test_decoding') INTO buf;
 END;
 $$ language plpgsql;
 
@@ -23,7 +23,7 @@ CREATE OR REPLACE FUNCTION create_slot_on_all_segments() RETURNS void AS $$
 DECLARE
   buf text;
 BEGIN
-  SELECT pg_create_logical_replication_slot('regression_slot_p', 'test_distributed_decoding') INTO buf; -- create slot on coordinator
+  SELECT pg_create_logical_replication_slot('regression_slot_p', 'test_decoding') INTO buf; -- create slot on coordinator
   SELECT create_slot() FROM gp_dist_random('gp_id') INTO buf;
 END;
 $$ language plpgsql;
@@ -58,7 +58,7 @@ $$ language plpgsql;
 -- Use the 'pg_logical_slot_get_changes' command to get the decoded log content on one segment.
 -- Normally pg_logical_slot_get_changes will return 'BEGIN xid'.
 -- For one-phase transactions, a flag is added, returning 'ONE-PHASE,BEGIN xid'.
--- The specific implementation code is in the 'pg_output_begin' function of test_distributed_decoding.c.
+-- The specific implementation code is in the 'pg_output_begin' function of test_decoding.c.
 CREATE OR REPLACE FUNCTION get_change() RETURNS void AS $$
 DECLARE
   buf text;
@@ -89,12 +89,12 @@ END;
 $$ language plpgsql;
 
 -- Start test
-SELECT 'init' FROM create_slot_on_all_segments();
-SELECT 'init' FROM execute_one_phase_transaction();
-SELECT 'init' FROM test_one_phase();
+SELECT * FROM create_slot_on_all_segments();
+SELECT * FROM execute_one_phase_transaction();
+SELECT * FROM test_one_phase();
 
 -- Clean
-SELECT 'init' FROM drop_slot_on_all_segments();
+SELECT * FROM drop_slot_on_all_segments();
 DROP TABLE test_table;
 DROP FUNCTION execute_one_phase_transaction;
 DROP FUNCTION test_one_phase;
