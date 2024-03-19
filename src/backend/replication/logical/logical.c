@@ -69,7 +69,9 @@ static void message_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
 							   const char *prefix, Size message_size, const char *message);
 
 static void LoadOutputPlugin(OutputPluginCallbacks *callbacks, char *plugin);
-
+/* We add a global pointer to avoid breaking ABI of structure LogicalDecodingContext */
+/* TODO: in next major version, we should add this structrure inside OutputPluginCallbacks */
+LogicalDecodeDistributedForgetCB PluginDistributedForgetCb = NULL;
 /*
  * Make sure the current settings & environment are capable of doing logical
  * decoding.
@@ -882,7 +884,7 @@ message_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
 void
 distributed_forget_cb_wrapper(LogicalDecodingContext *ctx, DistributedTransactionId gxid, int nsegs, XLogRecPtr start_lsn, XLogRecPtr end_lsn)
 {
-	if(ctx->callbacks.distributed_forget_cb == NULL)
+	if(PluginDistributedForgetCb == NULL)
 	{
 		return;
 	}
@@ -905,7 +907,7 @@ distributed_forget_cb_wrapper(LogicalDecodingContext *ctx, DistributedTransactio
 	ctx->write_location = end_lsn;
 
 	/* do the actual work: call callback */
-	ctx->callbacks.distributed_forget_cb(ctx, gxid, nsegs, start_lsn);
+	PluginDistributedForgetCb(ctx, gxid, nsegs, start_lsn);
 
 	/* Pop the error context stack */
 	error_context_stack = errcallback.previous;

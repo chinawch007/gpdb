@@ -85,7 +85,7 @@ _PG_output_plugin_init(OutputPluginCallbacks *cb)
 	cb->filter_by_origin_cb = pg_decode_filter;
 	cb->shutdown_cb = pg_decode_shutdown;
 	cb->message_cb = pg_decode_message;
-	cb->distributed_forget_cb = pg_decode_distributed_forget;
+	PluginDistributedForgetCb = pg_decode_distributed_forget;
 }
 
 
@@ -205,6 +205,7 @@ pg_decode_shutdown(LogicalDecodingContext *ctx)
 
 	/* cleanup our own resources via memory context reset */
 	MemoryContextDelete(data->context);
+	PluginDistributedForgetCb = NULL;
 }
 
 /* BEGIN callback */

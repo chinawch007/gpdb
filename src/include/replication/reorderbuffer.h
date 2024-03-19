@@ -165,9 +165,6 @@ typedef struct ReorderBufferTXN
 	bool		is_known_as_subxact;
 	TransactionId toplevel_xid;
 
-	DistributedTransactionId gxid;
-	bool 		is_one_phase;
-
 	/*
 	 * LSN of the first data carrying, WAL record with knowledge about this
 	 * xid. This is allowed to *not* be first record adorned with this xid, if
@@ -290,7 +287,8 @@ typedef struct ReorderBufferTXN
 	 * ---
 	 */
 	dlist_node	node;
-
+	DistributedTransactionId gxid;
+	bool		is_one_phase;
 } ReorderBufferTXN;
 
 /* so we can define the callbacks used inside struct ReorderBuffer itself */
