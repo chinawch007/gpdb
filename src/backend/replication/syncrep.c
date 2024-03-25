@@ -856,13 +856,38 @@ SyncRepGetCandidateStandbys(SyncRepStandbyData **standbys)
 
 		SpinLockAcquire(&walsnd->mutex);
 
+		if (!walsnd->is_for_gp_walreceiver)
+		{
+			/* 
+			 * The writing of wal log should never wait for logical walsender flush. 
+			 * If logical walsender process is selected, that means the updates 
+			 * of value of WalSndCtl->lsn[1] will be effected by logical walsender
+			 * which is not expected. Because the update of the logical walsender's
+			 * structure value of walsnd->flush is much slower than physical.
+			 * This may cause no matter coordinator or segment hung in function 
+			 * SyncRepWaitForLSN(), because the MyProc->waitLSN may be one value that 
+			 * is larger than logical walsender's flush, but smaller than physical 
+			 * walsender's flush. So it will hangs on waiting for logical walsender
+			 * to catch up, however, logical does not replay all of the wal log, so 
+			 * it will hang forever.
+			 * 
+			 * If without this check, with a logical replication started in each segment 
+			 * and coordinator:
+			 * Coordinator: normal commit will hang.
+			 * For segment: if one of the segment mirror is killed, and the gproverseg
+			 * will cause all of the walsender restart, then cause segment hang 
+			 * after commit new changes.
+			 */
+			SpinLockRelease(&walsnd->mutex);
+			continue;
+		}
+
 		if (IS_QUERY_DISPATCHER())
 		{
 			if ((walsnd->pid != 0)
 				&& ((walsnd->state == WALSNDSTATE_STREAMING)
 					|| (walsnd->state == WALSNDSTATE_CATCHUP &&
-						walsnd->caughtup_within_range))
-				&& walsnd->sync_standby_priority != 0)
+						walsnd->caughtup_within_range)))
 			{
 				stby->walsnd_index = i;
 				stby->pid = walsnd->pid;
