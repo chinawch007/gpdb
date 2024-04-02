@@ -1827,7 +1827,7 @@ RecordDistributedForgetCommitted(DistributedTransactionId gxid)
 
 	recptr = XLogInsert(RM_XACT_ID, info);
 	/* only flush immediately if we want to wait for remote_apply */
-	if (synchronous_commit >= SYNCHRONOUS_COMMIT_REMOTE_APPLY)
+	if (synchronous_commit >= SYNCHRONOUS_COMMIT_REMOTE_APPLY || XLogLogicalInfoActive())
 		XLogFlush(recptr);
 
 	return recptr;
