@@ -1438,7 +1438,7 @@ ReorderBufferFreeSnap(ReorderBuffer *rb, Snapshot snap)
 
 /* Set gxid and one_phase flag for commit transaction if any */
 void
-SetCommitGxidAndOnePhase(ReorderBuffer *rb, TransactionId xid, 
+ReorderBufferSetGxidAndOnePhase(ReorderBuffer *rb, TransactionId xid, 
 		DistributedTransactionId gxid, bool is_one_phase)
 {
 	ReorderBufferTXN *txn;

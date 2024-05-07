@@ -668,7 +668,7 @@ DecodeCommit(LogicalDecodingContext *ctx, XLogRecordBuffer *buf,
 								 buf->origptr, buf->endptr);
 	}
 
-	SetCommitGxidAndOnePhase(ctx->reorder, xid, parsed->distribXid, parsed->is_one_phase);
+	ReorderBufferSetGxidAndOnePhase(ctx->reorder, xid, parsed->distribXid, parsed->is_one_phase);
 	/* replay actions of all transaction + subtransactions in order */
 	ReorderBufferCommit(ctx->reorder, xid, buf->origptr, buf->endptr,
 						commit_time, origin_id, origin_lsn);
@@ -703,7 +703,7 @@ DecodeDistributedForget(LogicalDecodingContext *ctx,
 						xl_xact_parsed_distributed_forget *parsed, XLogRecPtr start_lsn, XLogRecPtr end_lsn)
 {
 	/*
-	 * ‘DocodeCommit’ also does this check, because the log file
+	 * ‘DecodeCommit’ also does this check, because the log file
 	 * contains transaction logs of different databases, but the
 	 * logical decoding of each slot only targets a single database,
 	 * so it is necessary to filter out the logs of other databases.

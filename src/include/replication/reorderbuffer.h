@@ -407,7 +407,7 @@ void		ReorderBufferQueueChange(ReorderBuffer *, TransactionId, XLogRecPtr lsn, R
 void		ReorderBufferQueueMessage(ReorderBuffer *, TransactionId, Snapshot snapshot, XLogRecPtr lsn,
 									  bool transactional, const char *prefix,
 									  Size message_size, const char *message);
-void		SetCommitGxidAndOnePhase(ReorderBuffer *rb, TransactionId xid, 
+void		ReorderBufferSetGxidAndOnePhase(ReorderBuffer *rb, TransactionId xid, 
 								DistributedTransactionId gxid, bool is_one_phase);
 void		ReorderBufferCommit(ReorderBuffer *, TransactionId,
 								XLogRecPtr commit_lsn, XLogRecPtr end_lsn,

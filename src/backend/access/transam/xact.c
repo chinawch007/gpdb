@@ -1795,24 +1795,22 @@ RecordDistributedForgetCommitted(DistributedTransactionId gxid)
 	xl_xact_xinfo xl_xinfo;
 	xl_xact_nsegs xl_nsegs;
 	xl_xact_dbinfo xl_dbinfo;
-
-	xl_xinfo.xinfo = 0;
 	uint8		info = XLOG_XACT_DISTRIBUTED_FORGET;
 
+	xl_xinfo.xinfo = 0;
 	xlrec.gxid = gxid;
 
 	if (XLogLogicalInfoActive())
 	{
 		xl_xinfo.xinfo |= XACT_XINFO_HAS_NSEGS;
-		xl_nsegs.nsegs = bms_num_members(MyTmGxactLocal->dtxSegmentsWroteLog);
+		xl_nsegs.nsegs = bms_num_members(MyTmGxactLocal->dtxLoggedSegMap);
 
 		xl_xinfo.xinfo |= XACT_XINFO_HAS_DBINFO;
 		xl_dbinfo.dbId = MyDatabaseId;
 		xl_dbinfo.tsId = MyDatabaseTableSpace;
-	}
-
-	if (xl_xinfo.xinfo != 0)
 		info |= XLOG_XACT_HAS_INFO;
+	}
+		
 	XLogBeginInsert();
 	XLogRegisterData((char *) &xlrec, sizeof(xl_xact_distributed_forget));
 

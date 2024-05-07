@@ -1112,11 +1112,11 @@ processResults(CdbDispatchResult *dispatchResult)
 			 */
 			if(XLogLogicalInfoActive() && MyTmGxactLocal->state == DTX_STATE_ACTIVE_DISTRIBUTED)
 			{
-				if(!bms_is_member(segdbDesc->segindex, MyTmGxactLocal->dtxSegmentsWroteLog))
+				if(!bms_is_member(segdbDesc->segindex, MyTmGxactLocal->dtxLoggedSegMap))
 				{
 					MemoryContext oldContext = MemoryContextSwitchTo(TopTransactionContext);
-					MyTmGxactLocal->dtxSegmentsWroteLog =
-						bms_add_member(MyTmGxactLocal->dtxSegmentsWroteLog, segdbDesc->segindex);
+					MyTmGxactLocal->dtxLoggedSegMap =
+						bms_add_member(MyTmGxactLocal->dtxLoggedSegMap, segdbDesc->segindex);
 					MemoryContextSwitchTo(oldContext);
 				}
 			}
