@@ -40,7 +40,7 @@
 #include "optimizer/subselect.h"
 #include "parser/parsetree.h"
 #include "utils/index_selfuncs.h"
-
+#include "cdb/cdbvars.h"
 
 /* source-code-compatibility hacks for pull_varnos() API change */
 #define pull_varnos(a,b) pull_varnos_new(a,b)
@@ -787,6 +787,9 @@ get_index_paths(PlannerInfo *root, RelOptInfo *rel,
 	 * matter.  However, some of the indexes might support only bitmap scans,
 	 * and those we mustn't submit to add_path here.)
 	 *
+	 * GPDB: We also disallow regular Index Scans on append-optimized tables if
+	 * the gp_enable_ao_indexscan GUC is set to off.
+	 *
 	 * Also, pick out the ones that are usable as bitmap scans.  For that, we
 	 * must discard indexes that don't support bitmap scans, and we also are
 	 * only interested in paths that have some selectivity; we should discard
@@ -795,28 +798,10 @@ get_index_paths(PlannerInfo *root, RelOptInfo *rel,
 	foreach(lc, indexpaths)
 	{
 		IndexPath  *ipath = (IndexPath *) lfirst(lc);
+		bool		indexonly = ipath->path.pathtype == T_IndexOnlyScan;
 
-		/*
-		 * Random access to Append-Only is slow because AO doesn't use the buffer
-		 * pool and we want to avoid decompressing blocks multiple times.
-		 *
-		 * Bitmap scans on the other hand are processed in TID order and the
-		 * AO table AMs optimize fetches in TID order by keeping the last
-		 * decompressed block between fetch calls.
-		 *
-		 * Thus, we ban index scans on append-optimized tables, and generally
-		 * only pick bitmap index scans.
-		 *
-		 * Exceptions:
-		 * (1) Index-only scans as they don't need to access the base table.
-		 * (2) If the index AM does not support a bitmap index scan, like
-		 * pgvector's ivfflat or hsnw.
-		 */
 		if (index->amhasgettuple &&
-				((!IsAccessMethodAO(rel->relam) ||
-				 index->amcostestimate == bmcostestimate ||
-				 ipath->path.pathtype == T_IndexOnlyScan ||
-				 (!index->amhasgetbitmap))))
+			((!IsAccessMethodAO(rel->relam)) || indexonly || gp_enable_ao_indexscan))
 			add_path(rel, (Path *) ipath);
 
 		if (index->amhasgetbitmap &&

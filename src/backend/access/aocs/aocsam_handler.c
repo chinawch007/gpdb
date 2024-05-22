@@ -19,14 +19,17 @@
 #include "access/heapam.h"
 #include "access/multixact.h"
 #include "access/tableam.h"
+#include "access/tsmapi.h"
 #include "access/xact.h"
 #include "catalog/aoseg.h"
 #include "catalog/catalog.h"
 #include "catalog/heap.h"
 #include "catalog/index.h"
 #include "catalog/pg_appendonly.h"
+#include "catalog/pg_attribute_encoding.h"
 #include "catalog/storage.h"
 #include "catalog/storage_xlog.h"
+#include "cdb/cdbappendonlyam.h"
 #include "cdb/cdbaocsam.h"
 #include "cdb/cdbvars.h"
 #include "commands/progress.h"
@@ -306,8 +309,8 @@ aoco_dml_finish(Relation relation)
 		state->uniqueCheckDesc->blockDirectory = NULL;
 
 		/*
-		 * If this fetch is a part of an update, then we have been reusing the
-		 * visimap used by the delete half of the update, which would have
+		 * If this fetch is a part of an UPDATE, then we have been reusing the
+		 * visimapDelete used by the delete half of the UPDATE, which would have
 		 * already been cleaned up above. Clean up otherwise.
 		 */
 		if (!had_delete_desc)
@@ -316,6 +319,7 @@ aoco_dml_finish(Relation relation)
 			pfree(state->uniqueCheckDesc->visimap);
 		}
 		state->uniqueCheckDesc->visimap = NULL;
+		state->uniqueCheckDesc->visiMapDelete = NULL;
 
 		pfree(state->uniqueCheckDesc);
 		state->uniqueCheckDesc = NULL;
@@ -431,18 +435,29 @@ get_or_create_unique_check_desc(Relation relation, Snapshot snapshot)
 													  relation,
 													  relation->rd_att->natts, /* numColGroups */
 													  snapshot);
+
 		/*
-		 * If this is part of an update, we need to reuse the visimap used by
-		 * the delete half of the update. This is to avoid spurious conflicts
-		 * when the key's previous and new value are identical. Using the
-		 * visimap from the delete half ensures that the visimap can recognize
-		 * any tuples deleted by us prior to this insert, within this command.
+		 * If this is part of an UPDATE, we need to reuse the visimapDelete
+		 * support structure from the delete half of the update. This is to
+		 * avoid spurious conflicts when the key's previous and new value are
+		 * identical. Using it ensures that we can recognize any tuples deleted
+		 * by us prior to this insert, within this command.
+		 *
+		 * Note: It is important that we reuse the visimapDelete structure and
+		 * not the visimap structure. This is because, when a uniqueness check
+		 * is performed as part of an UPDATE, visimap changes aren't persisted
+		 * yet (they are persisted at dml_finish() time, see
+		 * AppendOnlyVisimapDelete_Finish()). So, if we use the visimap
+		 * structure, we would not necessarily see all the changes.
 		 */
 		if (state->deleteDesc)
-			uniqueCheckDesc->visimap = &state->deleteDesc->visibilityMap;
+		{
+			uniqueCheckDesc->visiMapDelete = &state->deleteDesc->visiMapDelete;
+			uniqueCheckDesc->visimap = NULL;
+		}
 		else
 		{
-			/* Initialize the visimap */
+			/* COPY/INSERT: Initialize the visimap */
 			uniqueCheckDesc->visimap = palloc0(sizeof(AppendOnlyVisimap));
 			AppendOnlyVisimap_Init_forUniqueCheck(uniqueCheckDesc->visimap,
 												  relation,
@@ -529,6 +544,7 @@ aoco_beginscan_extractcolumns(Relation rel, Snapshot snapshot,
 							  List* constraintList, uint32 flags)
 {
 	bool needFree = false;
+	AOCSProjectionKind projKind = AOCS_PROJ_SOME;
 	AOCSScanDesc	aoscan;
 
 	AssertImply(list_length(targetlist) || list_length(qual) || list_length(constraintList), !proj);
@@ -544,15 +560,22 @@ aoco_beginscan_extractcolumns(Relation rel, Snapshot snapshot,
 		/*
 		* In some cases (for example, count(*)), targetlist and qual may be null,
 		* extractcolumns_walker will return immediately, so no columns are specified.
-		* We always scan the first column.
+		* We will pass no proj and defer the choice of the column later.
 		*/
 		if (!found)
-			proj[0] = true;
-		needFree = true;
+		{
+			projKind = AOCS_PROJ_ANY;
+			pfree(proj);
+			proj = NULL;
+			needFree = false;
+		}
+		else
+			needFree = true;
 	}
 	aoscan = aocs_beginscan(rel,
 							snapshot,
 							proj,
+							projKind,
 							flags);
 
 	if (needFree)
@@ -630,7 +653,8 @@ aoco_beginscan(Relation relation,
 
 	aoscan = aocs_beginscan(relation,
 							snapshot,
-							NULL,
+							NULL, /* proj */
+							AOCS_PROJ_ALL,
 							flags);
 
 	return (TableScanDesc) aoscan;
@@ -667,8 +691,7 @@ aoco_endscan(TableScanDesc scan)
  * GPDB_12_MERGE_FEATURE_NOT_SUPPORTED: When doing an initial rescan with `table_rescan`,
  * the values for the new flags (introduced by Table AM API) are
  * set to false. This means that whichever ScanOptions flags that were initially set will be
- * used for the rescan. However with TABLESAMPLE, which is currently not
- * supported for AO/CO, the new flags may be modified.
+ * used for the rescan. However with TABLESAMPLE, the new flags may be modified.
  * Additionally, allow_sync, allow_strat, and allow_pagemode may
  * need to be implemented for AO/CO in order to properly use them.
  * You may view `syncscan.c` as an example to see how heap added scan
@@ -727,10 +750,39 @@ aoco_index_fetch_begin(Relation rel)
 	IndexFetchAOCOData *aocoscan = palloc0(sizeof(IndexFetchAOCOData));
 
 	aocoscan->xs_base.rel = rel;
-
+	/* allocate proj array, will be initialized later */
+	aocoscan->proj = palloc0(RelationGetNumberOfAttributes(rel));
 	/* aocoscan other variables are initialized lazily on first fetch */
 
 	return &aocoscan->xs_base;
+}
+
+/*
+ * Set up column projection information in the fetch data structure, to be
+ * utilized during fetches. This information will be passed down lazily to
+ * aocs_fetch_init() on first tuple fetch.
+ */
+static void
+aoco_index_fetch_set_projection(IndexFetchTableData *scan,
+								List *targetlist, List *qual)
+{
+	IndexFetchAOCOData	*aocoscan = (IndexFetchAOCOData	*) scan;
+	Relation 			rel = scan->rel;
+	AttrNumber			natts = RelationGetNumberOfAttributes(rel);
+	bool				found = false;
+
+	/* projection array was already allocated */
+	Assert(aocoscan->proj);
+
+	found |= extractcolumns_from_node((Node *) targetlist, aocoscan->proj, natts);
+	found |= extractcolumns_from_node((Node *) qual, aocoscan->proj, natts);
+	/*
+	 * In some cases (for example, count(*)), targetlist and qual may be null,
+	 * extractcolumns_walker will return immediately, so no columns are specified.
+	 * We always scan the first column.
+	 */
+	if (!found && natts > 0)
+		aocoscan->proj[0] = true;
 }
 
 static void
@@ -788,13 +840,8 @@ aoco_index_fetch_tuple(struct IndexFetchTableData *scan,
 	if (!aocoscan->aocofetch)
 	{
 		Snapshot	appendOnlyMetaDataSnapshot;
-		int			natts;
 
-		/* Initiallize the projection info, assumes the whole row */
-		Assert(!aocoscan->proj);
-		natts = RelationGetNumberOfAttributes(scan->rel);
-		aocoscan->proj = palloc(natts * sizeof(*aocoscan->proj));
-		MemSet(aocoscan->proj, true, natts * sizeof(*aocoscan->proj));
+		Assert(aocoscan->proj);
 
 		appendOnlyMetaDataSnapshot = snapshot;
 		if (appendOnlyMetaDataSnapshot == SnapshotAny)
@@ -928,8 +975,9 @@ aoco_index_unique_check(Relation rel,
 	if (TransactionIdIsValid(snapshot->xmin) || TransactionIdIsValid(snapshot->xmax))
 		return true;
 
-	/* Now, consult the visimap */
-	visible = AppendOnlyVisimap_UniqueCheck(uniqueCheckDesc->visimap,
+	/* Now, perform a visibility check against the visimap infrastructure */
+	visible = AppendOnlyVisimap_UniqueCheck(uniqueCheckDesc->visiMapDelete,
+											uniqueCheckDesc->visimap,
 											aoTupleId,
 											snapshot);
 
@@ -1322,6 +1370,9 @@ aoco_relation_nontransactional_truncate(Relation rel)
 	heap_truncate_one_relid(aoseg_relid);
 	heap_truncate_one_relid(aoblkdir_relid);
 	heap_truncate_one_relid(aovisimap_relid);
+
+	/* Also clear pg_attribute_encoding.lastrownums */
+	ClearAttributeEncodingLastrownums(RelationGetRelid(rel));
 }
 
 static void
@@ -1487,6 +1538,7 @@ aoco_relation_cluster_internals(Relation OldHeap, Relation NewHeap, TupleDesc ol
 
 	scan = aocs_beginscan(OldHeap, GetActiveSnapshot(),
 						  NULL /* proj */,
+						  AOCS_PROJ_ALL,
 						  0 /* flags */);
 
 	/* Report cluster progress */
@@ -1724,9 +1776,9 @@ aoco_acquire_sample_rows(Relation onerel, int elevel, HeapTuple *rows,
 
 	/* Prepare for sampling tuple numbers */
 	RowSamplerData rs;
-	RowSampler_Init(&rs, *totalrows, targrows, random());
+	RowSampler_Init(&rs, totaltupcount, targrows, random());
 
-	while (RowSampler_HasMore(&rs))
+	while (RowSampler_HasMore(&rs) && (liverows < *totalrows))
 	{
 		aocoscan->targrow = RowSampler_Next(&rs);
 
@@ -1805,6 +1857,7 @@ aoco_index_build_range_scan(Relation heapRelation,
 	AppendOnlyBlockDirectory existingBlkdir;
 	bool        partialScanWithBlkdir = false;
 	int64 		previous_blkno = -1;
+	AppendOnlyBlockDirectoryEntry *dirEntries = NULL;
 
 	/*
 	 * sanity checks
@@ -1925,6 +1978,8 @@ aoco_index_build_range_scan(Relation heapRelation,
 
 	aocoscan = (AOCSScanDesc) scan;
 
+	aocoscan->partialScan = true;
+
 	/*
 	 * Note that block directory is created during creation of the first
 	 * index.  If it is found empty, it means the block directory was created
@@ -1951,7 +2006,10 @@ aoco_index_build_range_scan(Relation heapRelation,
 		 */
 		bool	*proj;
 		int		relnatts = RelationGetNumberOfAttributes(heapRelation);
-		AppendOnlyBlockDirectoryEntry dirEntry = {{0}};
+		bool 		needs_second_phase_positioning = true;
+		int64 		common_start_rownum = 0;
+		int64 		targetRownum = AOHeapBlockGet_startRowNum(start_blockno);
+		int 		targetSegno = AOSegmentGet_segno(start_blockno);
 
 		/* The range is contained within one seg. */
 		Assert(AOSegmentGet_segno(start_blockno) ==
@@ -1975,22 +2033,50 @@ aoco_index_build_range_scan(Relation heapRelation,
 												true,
 												proj);
 
+		if (aocoscan->columnScanInfo.relationTupleDesc == NULL)
+		{
+			aocoscan->columnScanInfo.relationTupleDesc = RelationGetDescr(aocoscan->rs_base.rs_rd);
+			/* Pin it! ... and of course release it upon destruction / rescan */
+			PinTupleDesc(aocoscan->columnScanInfo.relationTupleDesc);
+			initscan_with_colinfo(aocoscan);
+		}
+
+		/*
+		 * The first phase positioning.
+		 *
+		 * position to the start of a desired block, or just the start of
+		 * a segment. We keep the directory entry returned to calculate
+		 * a common starting rownum among those blocks which we will use
+		 * to do the second phase positioning to later.
+		 */
+		dirEntries = palloc0(sizeof(AppendOnlyBlockDirectoryEntry) * aocoscan->columnScanInfo.num_proj_atts);
 		for (int colIdx = 0; colIdx < aocoscan->columnScanInfo.num_proj_atts; colIdx++)
 		{
 			int		fsInfoIdx;
 			int 	columnGroupNo = aocoscan->columnScanInfo.proj_atts[colIdx];
 
+			/*
+			 * If the target rownum is missing in this column, no point searching
+			 * blkdir for it. Do nothing here, because later when we do the scan
+			 * we won't need to scan varblock for the target rownum for this column.
+			 * When we actually start to scan a rownum that is not missing, we will
+			 * open the first varblock of this column which starts with that rownum.
+			 */
+			if (AO_ATTR_VAL_IS_MISSING(targetRownum, columnGroupNo, targetSegno,
+								aocoscan->columnScanInfo.attnum_to_rownum))
+				continue;
+
 			if (AppendOnlyBlockDirectory_GetEntryForPartialScan(&existingBlkdir,
 																start_blockno,
 																columnGroupNo,
-																&dirEntry,
+																&dirEntries[colIdx],
 																&fsInfoIdx))
 			{
 				/*
 				 * Since we found a block directory entry near start_blockno, we
 				 * can use it to position our scan.
 				 */
-				if (!aocs_positionscan(aocoscan, &dirEntry, colIdx, fsInfoIdx))
+				if (!aocs_positionscan(aocoscan, &dirEntries[colIdx], colIdx, fsInfoIdx))
 				{
 					/*
 					 * If we have failed to position our scan, that can mean that
@@ -2010,6 +2096,13 @@ aoco_index_build_range_scan(Relation heapRelation,
 			else
 			{
 				/*
+				 * We should only reach here for the first column. Since we've
+				 * skipped any missing columns, we shouldn't have another case
+				 * where some column has blkdir entry but the other doesn't.
+				 */
+				Assert(colIdx == 0);
+
+				/*
 				 * We were unable to find a block directory row
 				 * encompassing/preceding the start block. This represents an
 				 * edge case where the start block of the range maps to a hole
@@ -2023,7 +2116,78 @@ aoco_index_build_range_scan(Relation heapRelation,
 				 * This will ensure that we don't skip the other possibly extant
 				 * blocks in the range.
 				 */
+				needs_second_phase_positioning = false;
 				break;
+			}
+		}
+
+		/*
+		 * The second phase positioning.
+		 *
+		 * Position to a common start rownum for every column.
+		 *
+		 * The common start rownum is just the max first rownum of all the
+		 * selected varblocks. It should be within the range of all the
+		 * varblocks in any possible cases:
+		 * 
+		 *   - Case 1: the target rownum does not fall into a hole.
+		 *       In this case, we return varblocks which contain the target row
+		 *       (see AppendOnlyBlockDirectory_GetEntryForPartialScan) and so 
+		 *       the first row num of each varblock will be lesser or equal to
+		 *       the target row num we are seeking. By extension, so will the
+		 *       max of all of those first row nums.
+		 *
+		 *   - Case 2a: the target row falls into a hole and we return varblocks
+		 *       immediately *succeeding* the hole (see 
+		 *       AppendOnlyBlockDirectory_GetEntryForPartialScan). By property 
+		 *       of the gp_fastsequence holes, all varblocks immediately
+		 *       succeeding the hole will have the same *first* row number.
+		 *
+		 *   - Case 2b: the target row falls into a hole and we return varblocks
+		 *       immediately *preceding* the hole (see 
+		 *       AppendOnlyBlockDirectory_GetEntryForPartialScan). By property 
+		 *       of the gp_fastsequence holes, all varblocks immediately
+		 *       preceding the hole will have the same *last* row number.
+		 *       So in this case the max first row number of all these varblocks
+		 *       should be smaller than the last row number.
+		 */
+		if (needs_second_phase_positioning)
+		{
+			/* find the common start rownum */
+			for (int colIdx = 0; colIdx < aocoscan->columnScanInfo.num_proj_atts; colIdx++)
+				common_start_rownum = Max(common_start_rownum, dirEntries[colIdx].range.firstRowNum);
+
+			/* position every column to that rownum */
+			for (int colIdx = 0; colIdx < aocoscan->columnScanInfo.num_proj_atts; colIdx++)
+			{
+				int 			err;
+				AttrNumber		attno = aocoscan->columnScanInfo.proj_atts[colIdx];
+				int32 			rowNumInBlock;
+
+				/* no need to position if we don't have a varblock for it */
+				if (dirEntries[colIdx].range.firstRowNum == 0)
+					continue;
+
+				/* otherwise, the blkdir entry we found must have a valid firstRowNum */
+				Assert(dirEntries[colIdx].range.firstRowNum > 0);
+
+				/* The common start rownum has to fall in the range of every block directory entry */
+				Assert(common_start_rownum >= dirEntries[colIdx].range.firstRowNum
+								&& common_start_rownum <= dirEntries[colIdx].range.lastRowNum);
+
+				/* read the varblock we've just positioned to */
+				err = datumstreamread_block(aocoscan->columnScanInfo.ds[attno], NULL, attno);
+				Assert(err >= 0); /* since it's a valid block, we must be able to read it */
+
+				rowNumInBlock = common_start_rownum - dirEntries[colIdx].range.firstRowNum;
+				Assert(rowNumInBlock >= 0);
+				/*
+				 * Position each column to point to the target row *minus one*. Reason for
+				 * the minus one is that, we are not going to read that row immediately.
+				 * What happens next is to call aocs_getnext which will advance to the target
+				 * row and then read from it. So we need to arrive to the *previous* row here.
+				 */
+				datumstreamread_find(aocoscan->columnScanInfo.ds[attno], rowNumInBlock - 1);
 			}
 		}
 	}
@@ -2170,6 +2334,9 @@ aoco_index_build_range_scan(Relation heapRelation,
 	}
 
 cleanup:
+	if (dirEntries)
+		pfree(dirEntries);
+
 	table_endscan(scan);
 
 	if (partialScanWithBlkdir)
@@ -2483,26 +2650,122 @@ aoco_scan_bitmap_next_tuple(TableScanDesc scan,
 static bool
 aoco_scan_sample_next_block(TableScanDesc scan, SampleScanState *scanstate)
 {
-	/*
-	 * GPDB_95_MERGE_FIXME: Add support for AO_COLUMN tables
-	 */
-	ereport(ERROR,
-			(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-			 errmsg("invalid relation type"),
-			 errhint("Sampling is only supported in heap tables.")));
+	TsmRoutine 			*tsm = scanstate->tsmroutine;
+	AOCSScanDesc 		aoscan = (AOCSScanDesc) scan;
+	int64 				totalrows = AOCSScanDesc_TotalTupCount(aoscan);
+
+	/* return false immediately if relation is empty */
+	if (aoscan->targrow >= totalrows)
+		return false;
+
+	if (tsm->NextSampleBlock)
+	{
+		int64 nblocks = (totalrows + (AO_MAX_TUPLES_PER_HEAP_BLOCK - 1)) / AO_MAX_TUPLES_PER_HEAP_BLOCK;
+		int64 nextblk;
+
+		nextblk = tsm->NextSampleBlock(scanstate, nblocks);
+
+		if (nextblk <= aoscan->sampleTargetBlk)
+		{
+			/*
+			 * Some tsm methods may wrap around and return a block prior to our
+			 * current scan position, like tsm_system_time.
+			 *
+			 * Since our sample scan infrastructure expects monotonically
+			 * increasing block numbers between successive calls, simply rewind
+			 * the scan here.
+			 */
+			aoco_rescan(&aoscan->rs_base, NULL, false, false, false, false);
+		}
+
+		aoscan->sampleTargetBlk = nextblk;
+
+		/* ran out of blocks, scan is done */
+		if (aoscan->sampleTargetBlk == InvalidBlockNumber)
+			return false;
+		else
+		{
+			/* target the first row of the selected block */
+			Assert(aoscan->sampleTargetBlk < nblocks);
+
+			aoscan->targrow = aoscan->sampleTargetBlk * AO_MAX_TUPLES_PER_HEAP_BLOCK;
+			return true;
+		}
+	}
+	else
+	{
+		/* scanning table sequentially */
+		Assert(aoscan->sampleTargetBlk >= -1);
+
+		/* target the first row of the next block */
+		aoscan->sampleTargetBlk++;
+		aoscan->targrow = aoscan->sampleTargetBlk * AO_MAX_TUPLES_PER_HEAP_BLOCK;
+
+		/* ran out of blocks, scan is done */
+		if (aoscan->targrow >= totalrows)
+			return false;
+
+		return true;
+	}
 }
 
 static bool
 aoco_scan_sample_next_tuple(TableScanDesc scan, SampleScanState *scanstate,
                                   TupleTableSlot *slot)
 {
-	/*
-	 * GPDB_95_MERGE_FIXME: Add support for AO_COLUMN tables
-	 */
-	ereport(ERROR,
-			(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-			 errmsg("invalid relation type"),
-			 errhint("Sampling is only supported in heap tables.")));
+	TsmRoutine 			*tsm = scanstate->tsmroutine;
+	AOCSScanDesc 		aoscan = (AOCSScanDesc) scan;
+	int64  				currblk = aoscan->targrow / AO_MAX_TUPLES_PER_HEAP_BLOCK;
+	int64 				totalrows = AOCSScanDesc_TotalTupCount(aoscan);
+
+	Assert(aoscan->sampleTargetBlk >= 0);
+	Assert(aoscan->targrow >= 0 && aoscan->targrow < totalrows);
+
+	for (;;)
+	{
+		OffsetNumber targetoffset;
+		OffsetNumber maxoffset;
+
+		CHECK_FOR_INTERRUPTS();
+
+		/*
+		 * Ask the tablesample method which rows to scan on this block. Refer
+		 * to AOCSScanDesc->sampleTargetBlk for our blocking scheme.
+		 *
+		 * Note: unlike heapam, we are guaranteed to have
+		 * AO_MAX_TUPLES_PER_HEAP_BLOCK tuples in this block (unless this is the
+		 * last such block in the relation)
+		 */
+		maxoffset = Min(AO_MAX_TUPLES_PER_HEAP_BLOCK,
+						totalrows - currblk * AO_MAX_TUPLES_PER_HEAP_BLOCK);
+		targetoffset = tsm->NextSampleTuple(scanstate,
+											currblk,
+											maxoffset);
+
+		if (targetoffset != InvalidOffsetNumber)
+		{
+			Assert(targetoffset <= maxoffset);
+
+			aoscan->targrow = currblk * AO_MAX_TUPLES_PER_HEAP_BLOCK + targetoffset - 1;
+			Assert(aoscan->targrow < totalrows);
+
+			if (aocs_get_target_tuple(aoscan, aoscan->targrow, slot))
+				return true;
+
+			/* tuple was deleted, loop around to try the next one */
+		}
+		else
+		{
+			/*
+			 * If we get here, it means we've exhausted the items on this block
+			 * and it's time to move to the next.
+			 */
+			ExecClearTuple(slot);
+			return false;
+		}
+	}
+
+	Assert(0);
 }
 
 /* ------------------------------------------------------------------------
@@ -2541,6 +2804,7 @@ static const TableAmRoutine ao_column_methods = {
 	.parallelscan_reinitialize = aoco_parallelscan_reinitialize,
 
 	.index_fetch_begin = aoco_index_fetch_begin,
+	.index_fetch_set_projection = aoco_index_fetch_set_projection,
 	.index_fetch_reset = aoco_index_fetch_reset,
 	.index_fetch_end = aoco_index_fetch_end,
 	.index_fetch_tuple = aoco_index_fetch_tuple,

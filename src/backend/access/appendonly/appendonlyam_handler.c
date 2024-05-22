@@ -21,6 +21,7 @@
 #include "access/heapam.h"
 #include "access/multixact.h"
 #include "access/tableam.h"
+#include "access/tsmapi.h"
 #include "access/tuptoaster.h"
 #include "access/xact.h"
 #include "catalog/aoseg.h"
@@ -29,6 +30,7 @@
 #include "catalog/index.h"
 #include "catalog/pg_am.h"
 #include "catalog/pg_appendonly.h"
+#include "catalog/pg_attribute_encoding.h"
 #include "catalog/pg_type.h"
 #include "catalog/storage.h"
 #include "catalog/storage_xlog.h"
@@ -270,7 +272,7 @@ appendonly_dml_finish(Relation relation)
 
 		/*
 		 * If this fetch is a part of an update, then we have been reusing the
-		 * visimap used by the delete half of the update, which would have
+		 * visimapDelete used by the delete half of the update, which would have
 		 * already been cleaned up above. Clean up otherwise.
 		 */
 		if (!had_delete_desc)
@@ -279,6 +281,7 @@ appendonly_dml_finish(Relation relation)
 			pfree(state->uniqueCheckDesc->visimap);
 		}
 		state->uniqueCheckDesc->visimap = NULL;
+		state->uniqueCheckDesc->visiMapDelete = NULL;
 
 		pfree(state->uniqueCheckDesc);
 		state->uniqueCheckDesc = NULL;
@@ -389,17 +392,27 @@ get_or_create_unique_check_desc(Relation relation, Snapshot snapshot)
 													  snapshot);
 
 		/*
-		 * If this is part of an update, we need to reuse the visimap used by
-		 * the delete half of the update. This is to avoid spurious conflicts
-		 * when the key's previous and new value are identical. Using the
-		 * visimap from the delete half ensures that the visimap can recognize
-		 * any tuples deleted by us prior to this insert, within this command.
+		 * If this is part of an UPDATE, we need to reuse the visimapDelete
+		 * support structure from the delete half of the update. This is to
+		 * avoid spurious conflicts when the key's previous and new value are
+		 * identical. Using it ensures that we can recognize any tuples deleted
+		 * by us prior to this insert, within this command.
+		 *
+		 * Note: It is important that we reuse the visimapDelete structure and
+		 * not the visimap structure. This is because, when a uniqueness check
+		 * is performed as part of an UPDATE, visimap changes aren't persisted
+		 * yet (they are persisted at dml_finish() time, see
+		 * AppendOnlyVisimapDelete_Finish()). So, if we use the visimap
+		 * structure, we would not necessarily see all the changes.
 		 */
 		if (state->deleteDesc)
-			uniqueCheckDesc->visimap = &state->deleteDesc->visibilityMap;
+		{
+			uniqueCheckDesc->visiMapDelete = &state->deleteDesc->visiMapDelete;
+			uniqueCheckDesc->visimap = NULL;
+		}
 		else
 		{
-			/* Initialize the visimap */
+			/* COPY/INSERT: Initialize the visimap */
 			uniqueCheckDesc->visimap = palloc0(sizeof(AppendOnlyVisimap));
 			AppendOnlyVisimap_Init_forUniqueCheck(uniqueCheckDesc->visimap,
 												  relation,
@@ -680,8 +693,9 @@ appendonly_index_unique_check(Relation rel,
 	if (TransactionIdIsValid(snapshot->xmin) || TransactionIdIsValid(snapshot->xmax))
 		return true;
 
-	/* Now, consult the visimap */
-	visible = AppendOnlyVisimap_UniqueCheck(uniqueCheckDesc->visimap,
+	/* Now, perform a visibility check against the visimap infrastructure */
+	visible = AppendOnlyVisimap_UniqueCheck(uniqueCheckDesc->visiMapDelete,
+											uniqueCheckDesc->visimap,
 											aoTupleId,
 											snapshot);
 
@@ -1093,6 +1107,12 @@ appendonly_relation_nontransactional_truncate(Relation rel)
 	heap_truncate_one_relid(aoseg_relid);
 	heap_truncate_one_relid(aoblkdir_relid);
 	heap_truncate_one_relid(aovisimap_relid);
+
+	/*
+	 * Also clean up pg_attribute_encoding entries which were only useful for
+	 * the AO table about the lastrownums information. Since table data is
+	 * truncated we do not need the lastrownums info anymore. */
+	RemoveAttributeEncodingsByRelid(RelationGetRelid(rel));
 }
 
 static void
@@ -1523,9 +1543,9 @@ appendonly_acquire_sample_rows(Relation onerel, int elevel, HeapTuple *rows,
 
 	/* Prepare for sampling row numbers */
 	RowSamplerData rs;
-	RowSampler_Init(&rs, *totalrows, targrows, random());
+	RowSampler_Init(&rs, totaltupcount, targrows, random());
 
-	while (RowSampler_HasMore(&rs))
+	while (RowSampler_HasMore(&rs) && (liverows < *totalrows))
 	{
 		aoscan->targrow = RowSampler_Next(&rs);
 
@@ -2262,26 +2282,122 @@ appendonly_scan_bitmap_next_tuple(TableScanDesc scan,
 static bool
 appendonly_scan_sample_next_block(TableScanDesc scan, SampleScanState *scanstate)
 {
-	/*
-	 * GPDB_95_MERGE_FIXME: Add support for AO tables
-	 */
-	ereport(ERROR,
-			(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-			 errmsg("invalid relation type"),
-			 errhint("Sampling is only supported in heap tables.")));
+	TsmRoutine 			*tsm = scanstate->tsmroutine;
+	AppendOnlyScanDesc 	aoscan = (AppendOnlyScanDesc) scan;
+	int64 				totalrows = AppendOnlyScanDesc_TotalTupCount(aoscan);
+
+	/* return false immediately if relation is empty */
+	if (aoscan->targrow >= totalrows)
+		return false;
+
+	if (tsm->NextSampleBlock)
+	{
+		int64 nblocks = (totalrows + (AO_MAX_TUPLES_PER_HEAP_BLOCK - 1)) / AO_MAX_TUPLES_PER_HEAP_BLOCK;
+		int64 nextblk;
+
+		nextblk = tsm->NextSampleBlock(scanstate, nblocks);
+
+		if (nextblk <= aoscan->sampleTargetBlk)
+		{
+			/*
+			 * Some tsm methods may wrap around and return a block prior to our
+			 * current scan position, like tsm_system_time.
+			 *
+			 * Since our sample scan infrastructure expects monotonically
+			 * increasing block numbers between successive calls, simply rewind
+			 * the scan here.
+			 */
+			appendonly_rescan(&aoscan->rs_base, NULL, false, false, false, false);
+		}
+
+		aoscan->sampleTargetBlk = nextblk;
+
+		/* ran out of blocks, scan is done */
+		if (aoscan->sampleTargetBlk == InvalidBlockNumber)
+			return false;
+		else
+		{
+			/* target the first row of the selected block */
+			Assert(aoscan->sampleTargetBlk < nblocks);
+
+			aoscan->targrow = aoscan->sampleTargetBlk * AO_MAX_TUPLES_PER_HEAP_BLOCK;
+			return true;
+		}
+	}
+	else
+	{
+		/* scanning table sequentially */
+		Assert(aoscan->sampleTargetBlk >= -1);
+
+		/* target the first row of the next block */
+		aoscan->sampleTargetBlk++;
+		aoscan->targrow = aoscan->sampleTargetBlk * AO_MAX_TUPLES_PER_HEAP_BLOCK;
+
+		/* ran out of blocks, scan is done */
+		if (aoscan->targrow >= totalrows)
+			return false;
+
+		return true;
+	}
 }
 
 static bool
 appendonly_scan_sample_next_tuple(TableScanDesc scan, SampleScanState *scanstate,
 							  TupleTableSlot *slot)
 {
-	/*
-	 * GPDB_95_MERGE_FIXME: Add support for AO tables
-	 */
-	ereport(ERROR,
-			(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-			 errmsg("invalid relation type"),
-			 errhint("Sampling is only supported in heap tables.")));
+	TsmRoutine 			*tsm = scanstate->tsmroutine;
+	AppendOnlyScanDesc 	aoscan = (AppendOnlyScanDesc) scan;
+	int64  				currblk = aoscan->targrow / AO_MAX_TUPLES_PER_HEAP_BLOCK;
+	int64 				totalrows = AppendOnlyScanDesc_TotalTupCount(aoscan);
+
+	Assert(aoscan->sampleTargetBlk >= 0);
+	Assert(aoscan->targrow >= 0 && aoscan->targrow < totalrows);
+
+	for (;;)
+	{
+		OffsetNumber targetoffset;
+		OffsetNumber maxoffset;
+
+		CHECK_FOR_INTERRUPTS();
+
+		/*
+		 * Ask the tablesample method which rows to scan on this block. Refer
+		 * to AppendOnlyScanDesc->sampleTargetBlk for our blocking scheme.
+		 *
+		 * Note: unlike heapam, we are guaranteed to have
+		 * AO_MAX_TUPLES_PER_HEAP_BLOCK tuples in this block (unless this is the
+		 * last such block in the relation)
+		 */
+		maxoffset = Min(AO_MAX_TUPLES_PER_HEAP_BLOCK,
+						totalrows - currblk * AO_MAX_TUPLES_PER_HEAP_BLOCK);
+		targetoffset = tsm->NextSampleTuple(scanstate,
+											currblk,
+											maxoffset);
+
+		if (targetoffset != InvalidOffsetNumber)
+		{
+			Assert(targetoffset <= maxoffset);
+
+			aoscan->targrow = currblk * AO_MAX_TUPLES_PER_HEAP_BLOCK + targetoffset - 1;
+			Assert(aoscan->targrow < totalrows);
+
+			if (appendonly_get_target_tuple(aoscan, aoscan->targrow, slot))
+				return true;
+
+			/* tuple was deleted, loop around to try the next one */
+		}
+		else
+		{
+			/*
+			 * If we get here, it means we've exhausted the items on this block
+			 * and it's time to move to the next.
+			 */
+			ExecClearTuple(slot);
+			return false;
+		}
+	}
+
+	Assert(0);
 }
 
 /* ------------------------------------------------------------------------
@@ -2308,6 +2424,7 @@ static const TableAmRoutine ao_row_methods = {
 	.parallelscan_reinitialize = appendonly_parallelscan_reinitialize,
 
 	.index_fetch_begin = appendonly_index_fetch_begin,
+	.index_fetch_set_projection = NULL,
 	.index_fetch_reset = appendonly_index_fetch_reset,
 	.index_fetch_end = appendonly_index_fetch_end,
 	.index_fetch_tuple = appendonly_index_fetch_tuple,

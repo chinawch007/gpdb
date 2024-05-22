@@ -21,6 +21,7 @@ CREATE LANGUAGE plpython3u;
 -- enable resource group and restart cluster.
 -- start_ignore
 ! gpconfig -c gp_resource_manager -v group-v2;
+! gpconfig -c gp_resource_group_cgroup_parent -v "gpdb"
 ! gpconfig -c max_connections -v 250 -m 25;
 ! gpconfig -c runaway_detector_activation_percent -v 100;
 ! gpstop -rai;
@@ -259,7 +260,7 @@ $$ LANGUAGE plpython3u;
                                 capture_output=True, check=True).stdout
         session_pids = stdout.splitlines()
 
-        path = "/sys/fs/cgroup/gpdb/{}/cgroup.procs".format(groupid)
+        path = "/sys/fs/cgroup/gpdb/{}/queries/cgroup.procs".format(groupid)
         stdout = subprocess.run(["ssh", "{}".format(host), "cat {}".format(path)], capture_output=True, check=True).stdout
         cgroups_pids = stdout.splitlines()
 
@@ -367,6 +368,19 @@ $$ LANGUAGE plpython3u;
     groupid = result[0]['groupid']
 
     clear_io_max(groupid)
+
+    cgroup_path = "/sys/fs/cgroup/gpdb/%d/io.max" % groupid
+
+    return os.stat(cgroup_path).st_size == 0
+$$ LANGUAGE plpython3u;
+
+0: CREATE OR REPLACE FUNCTION check_io_max_empty(groupname text) RETURNS BOOL AS $$
+    import os
+
+    # get group oid
+    sql = "select groupid from gp_toolkit.gp_resgroup_config where groupname = '%s'" % groupname
+    result = plpy.execute(sql)
+    groupid = result[0]['groupid']
 
     cgroup_path = "/sys/fs/cgroup/gpdb/%d/io.max" % groupid
 

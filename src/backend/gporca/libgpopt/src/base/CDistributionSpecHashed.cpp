@@ -113,7 +113,15 @@ CDistributionSpecHashed::PopulateDefaultOpfamilies()
 		IMDId *mdid_type = CScalar::PopConvert(expr->Pop())->MdidType();
 		IMDId *mdid_opfamily =
 			mda->RetrieveType(mdid_type)->GetDistrOpfamilyMdid();
-		GPOS_ASSERT(nullptr != mdid_opfamily && mdid_opfamily->IsValid());
+		if (nullptr == mdid_opfamily || !mdid_opfamily->IsValid())
+		{
+			// For a data type the retrieved opfamily can be 'InvalidOid'.
+			// Eg - For 'json', the distribution opfamily is 'InvalidOid'.
+			// Using an InvalidOid can lead to crash.
+			m_opfamilies->Release();
+			m_opfamilies = nullptr;
+			return;
+		}
 		mdid_opfamily->AddRef();
 		m_opfamilies->Append(mdid_opfamily);
 	}
@@ -962,10 +970,7 @@ CDistributionSpecHashed *
 CDistributionSpecHashed::Combine(CMemoryPool *mp,
 								 CDistributionSpecHashed *other_spec)
 {
-	if (nullptr == other_spec)
-	{
-		return this;
-	}
+	GPOS_ASSERT(nullptr != other_spec);
 
 	CDistributionSpecHashed *combined_spec = other_spec->Copy(mp);
 	CDistributionSpecHashed *prev = nullptr, *next = nullptr;

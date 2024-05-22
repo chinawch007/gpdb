@@ -97,8 +97,15 @@ m/^DEBUG:  probing availability of JIT provider/
 m/^DEBUG:  LLVMJIT detected CPU/
 m/^DEBUG:  time to inline:/
 
+# Ignore creating zero-column table warning
+m/^WARNING:  creating a table with no columns./
+
 # Ignore data access indicator notice.
 m/NOTICE:  specifying ".*" acts as no operation./
+
+# Ignore "terminating connection due to administrator command" as the output is
+# not always echoed to the client.
+m/FATAL:  terminating connection due to administrator command/
 
 -- end_matchignore
 
@@ -170,6 +177,9 @@ s/.//gs
 m/\(dbsize\.c\:\d+\)/
 s/\(dbsize\.c:\d+\)/\(dbsize\.c:XXX\)/
 
+m/\(cdbmutate\.c\:\d+\)/
+s/\(cdbmutate\.c:\d+\)/\(cdbmutate\.c:XXX\)/
+
 # remove the cdbdisp_async suffix of some ERROR messages
 m/ \(cdbdisp_async\.c.*\)/
 s/ \(cdbdisp_async\.c.*\)//
@@ -196,4 +206,13 @@ s/^\s+QUERY PLAN\s*$/ QUERY PLAN \n/
 m/^------------+\s*$/
 s/^------------+\s*$/------------\n/
 
+# ignore Heap Blocks: {exact,lossy} counter values in EXPLAIN outputs
+-- m/Heap Blocks: exact=\d+/
+-- s/Heap Blocks: exact=\d+/Heap Blocks: exact=###/
+-- m/Heap Blocks: lossy=\d+/
+-- s/Heap Blocks: lossy=\d+/Heap Blocks: lossy=###/
+
+# ignore resource queue ids
+m/resource queue id: \d+/
+s/resource queue id: \d+/resource queue id: XXXX/
 -- end_matchsubs

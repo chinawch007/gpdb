@@ -1,13 +1,59 @@
 @gprecoverseg
 Feature: gprecoverseg tests
 
-    Scenario Outline: <scenario> recovery works with tablespaces
+  @demo_cluster
+  @concourse_cluster
+  Scenario: gprecoverseg recovery with a recovery configuration file and differential flag
+      Given the database is running
+        And all the segments are running
+        And the segments are synchronized
+        And user immediately stops all mirror processes for content 0,1,2
+        And the user waits until mirror on content 0,1,2 is down
+        And user can start transactions
+        And the gprecoverseg input file "recover_config_file" is cleaned up
+       When a gprecoverseg input file "recover_config_file" is created with all the failed segments and valid recovery type
+        And the user runs "gprecoverseg -i /tmp/recover_config_file -a --differential"
+       Then gprecoverseg should return a return code of 0
+        And verify that mirror on content 0,1,2 is up
+        And gprecoverseg should print "Synchronization mode.* = Differential" to stdout 2 times
+        And gprecoverseg should print "Synchronization mode.* = Full" to stdout 1 times
+        And all the segments are running
+        And the segments are synchronized
+
+
+  @demo_cluster
+  @concourse_cluster
+  Scenario: gprecoverseg" with a recovery configuration file specifying the recovery type
+      Given the database is running
+        And all the segments are running
+        And the segments are synchronized
+        And user immediately stops all mirror processes for content 0,1,2
+        And the user waits until mirror on content 0,1,2 is down
+        And user can start transactions
+        And the gprecoverseg input file "recover_config_file" is cleaned up
+       When a gprecoverseg input file "recover_config_file" is created with all the failed segments and invalid recovery type
+        And the user runs "gprecoverseg -i /tmp/recover_config_file -a"
+       Then gprecoverseg should return a return code of 2
+        And gprecoverseg should print "Invalid recovery type provided, please provide any of I,D,F,i,d,f as recovery_type" to stdout
+        And verify that mirror on content 0,1,2 is down
+       When a gprecoverseg input file "recover_config_file" is created with all the failed segments and valid recovery type
+        And the user runs "gprecoverseg -i /tmp/recover_config_file -a"
+       Then gprecoverseg should return a return code of 0
+        And verify that mirror on content 0,1,2 is up
+        And gprecoverseg should print "Synchronization mode.*= Incremental" to stdout 1 times
+        And gprecoverseg should print "Synchronization mode.* = Differential" to stdout 1 times
+        And gprecoverseg should print "Synchronization mode.* = Full" to stdout 1 times
+        And all the segments are running
+        And the segments are synchronized
+
+  Scenario Outline: <scenario> recovery works with tablespaces
         Given the database is running
           And user stops all primary processes
           And user can start transactions
           And a tablespace is created with data
          When the user runs "gprecoverseg <args>"
          Then gprecoverseg should return a return code of 0
+          And gprecoverseg should print "Future gprecoverseg executions might remove the currently created pg_basebackup/pg_rewind/rsync progress files, please save these files if needed." to stdout
           And the segments are synchronized
           And verify replication slot internal_wal_replication_slot is available on all the segments
           And the tablespace is valid
@@ -60,10 +106,7 @@ Feature: gprecoverseg tests
         And gprecoverseg should print "Only one of -F and --differential may be specified" to stdout
        When the user runs "gprecoverseg -a --differential -p localhost"
        Then gprecoverseg should return a return code of 2
-        And gprecoverseg should print "Only one of -i, -p, -r and --differential may be specified" to stdout
-       When the user runs gprecoverseg with input file and additional args "-a --differential"
-       Then gprecoverseg should return a return code of 2
-        And gprecoverseg should print "Only one of -i, -p, -r and --differential may be specified" to stdout
+        And gprecoverseg should print "Only one of -p, -r and --differential may be specified" to stdout
        When the user runs "gprecoverseg -a --differential -o outputConfigFile"
        Then gprecoverseg should return a return code of 2
         And gprecoverseg should print "Invalid -o provided with --differential argument" to stdout
@@ -111,6 +154,52 @@ Feature: gprecoverseg tests
           And verify that mirror on content 0,1,2 is up
           And verify replication slot internal_wal_replication_slot is available on all the segments
           And the cluster is rebalanced
+
+
+    @concourse_cluster
+    Scenario: gpstate track of differential recovery for single host
+      Given the database is running
+      And all files in gpAdminLogs directory are deleted on all hosts in the cluster
+      And user immediately stops all mirror processes for content 0
+      And the user waits until mirror on content 0 is down
+      And user can start transactions
+      And sql "DROP TABLE IF EXISTS test_recoverseg; CREATE TABLE test_recoverseg AS SELECT generate_series(1,100000000) AS a;" is executed in "postgres" db
+      And sql "DROP TABLE IF EXISTS test_recoverseg_1; CREATE TABLE test_recoverseg_1 AS SELECT generate_series(1,100000000) AS a;" is executed in "postgres" db
+      When the user asynchronously runs "gprecoverseg -a --differential" and the process is saved
+      Then the user waits until recovery_progress.file is created in gpAdminLogs and verifies that all dbids progress with pg_data are present
+      When the user runs "gpstate -e"
+      Then gpstate should print "Segments in recovery" to stdout
+      And gpstate output contains "differential" entries for mirrors of content 0
+          And gpstate output looks like
+              | Segment | Port   | Recovery type  | Stage                                      | Completed bytes \(kB\) | Percentage completed |
+              | \S+     | [0-9]+ | differential   | Syncing pg_data of dbid 6                  | ([\d,]+)[ \t]          | \d+%                 |
+      And the user waits until saved async process is completed
+      And all files in gpAdminLogs directory are deleted on all hosts in the cluster
+      And sql "DROP TABLE IF EXISTS test_recoverseg;" is executed in "postgres" db
+      And sql "DROP TABLE IF EXISTS test_recoverseg_1;" is executed in "postgres" db
+      And the cluster is rebalanced
+
+
+    @concourse_cluster
+    Scenario: check Tablespace Recovery Progress with gpstate
+       Given the database is running
+      And all files in gpAdminLogs directory are deleted on all hosts in the cluster
+      And user immediately stops all mirror processes for content 0
+      And user can start transactions
+      And a tablespace is created with data
+      And insert additional data into the tablespace
+      When the user asynchronously runs "gprecoverseg -a --differential" and the process is saved
+      Then the user waits until recovery_progress.file is created in gpAdminLogs and verifies that all dbids progress with tablespace are present
+      When the user runs "gpstate -e"
+      Then gpstate should print "Segments in recovery" to stdout
+      And gpstate output contains "differential" entries for mirrors of content 0
+          And gpstate output looks like
+              | Segment | Port   | Recovery type  | Stage                                      | Completed bytes \(kB\) | Percentage completed |
+              | \S+     | [0-9]+ | differential   | Syncing tablespace of dbid 6 for oid \d+   | ([\d,]+)[ \t]          | \d+%                 |
+      And the user waits until saved async process is completed
+      And all files in gpAdminLogs directory are deleted on all hosts in the cluster
+      And the cluster is rebalanced
+
 
     Scenario Outline: full recovery limits number of parallel processes correctly
         Given the database is running
@@ -198,8 +287,7 @@ Feature: gprecoverseg tests
         Then gprecoverseg should return a return code of 0
         And gprecoverseg should print "pg_basebackup: base backup completed" to stdout for each mirror
         And gprecoverseg should print "Segments successfully recovered" to stdout
-        And gpAdminLogs directory has no "pg_basebackup*" files on all segment hosts
-        And gpAdminLogs directory has no "pg_rewind*" files on all segment hosts
+        And gpAdminLogs directory has "pg_basebackup*" files on all segment hosts
         And gpAdminLogs directory has "gpsegrecovery*" files
         And gpAdminLogs directory has "gpsegsetuprecovery*" files
         And all the segments are running
@@ -247,8 +335,8 @@ Feature: gprecoverseg tests
       And gprecoverseg should print "Segments successfully recovered" to stdout
       And check if gprecoverseg ran gpsegsetuprecovery.py 1 times with the expected args
       And check if gprecoverseg ran gpsegrecovery.py 1 times with the expected args
-      And gpAdminLogs directory has no "pg_basebackup*" files
-      And gpAdminLogs directory has no "pg_rewind*" files
+      And gpAdminLogs directory has "pg_basebackup*" files
+      And gpAdminLogs directory has "pg_rewind*" files
       And gpAdminLogs directory has "gpsegsetuprecovery*" files on all segment hosts
       And gpAdminLogs directory has "gpsegrecovery*" files on all segment hosts
       And the old data directories are cleaned up for content 0
@@ -269,7 +357,7 @@ Feature: gprecoverseg tests
         When the user runs "gprecoverseg -a -s"
         Then gprecoverseg should return a return code of 0
         And gprecoverseg should print "pg_rewind: Done!" to stdout for each mirror
-        And gpAdminLogs directory has no "pg_rewind*" files
+        And gpAdminLogs directory has "pg_rewind*" files
         And gpAdminLogs directory has "gpsegsetuprecovery*" files on all segment hosts
         And gpAdminLogs directory has "gpsegrecovery*" files on all segment hosts
 
@@ -287,7 +375,7 @@ Feature: gprecoverseg tests
         Then gprecoverseg should return a return code of 0
         And gprecoverseg should print "Initiating segment recovery. Upon completion, will start the successfully recovered segments" to stdout
         And gprecoverseg should not print "pg_basebackup: base backup completed" to stdout
-        And gpAdminLogs directory has no "pg_basebackup*" files
+        And gpAdminLogs directory has "pg_basebackup*" files
         And all the segments are running
         And the segments are synchronized
 
@@ -329,9 +417,7 @@ Feature: gprecoverseg tests
         And gprecoverseg should print "Initiating segment recovery. Upon completion, will start the successfully recovered segments" to stdout
         And gprecoverseg should print "total size" to stdout for each mirror
         And gprecoverseg should print "Segments successfully recovered" to stdout
-        And gpAdminLogs directory has no "pg_basebackup*" files on all segment hosts
-        And gpAdminLogs directory has no "pg_rewind*" files on all segment hosts
-        And gpAdminLogs directory has no "rsync*" files on all segment hosts
+        And gpAdminLogs directory has "rsync*" files on all segment hosts
         And gpAdminLogs directory has "gpsegrecovery*" files
         And gpAdminLogs directory has "gpsegsetuprecovery*" files
         And all the segments are running
@@ -351,9 +437,7 @@ Feature: gprecoverseg tests
         And gprecoverseg should print "Initiating segment recovery. Upon completion, will start the successfully recovered segments" to stdout
         And gprecoverseg should not print "total size is .*  speedup is .*" to stdout
         And gprecoverseg should print "Segments successfully recovered" to stdout
-        And gpAdminLogs directory has no "pg_basebackup*" files on all segment hosts
-        And gpAdminLogs directory has no "pg_rewind*" files on all segment hosts
-        And gpAdminLogs directory has no "rsync*" files on all segment hosts
+        And gpAdminLogs directory has "rsync*" files on all segment hosts
         And gpAdminLogs directory has "gpsegrecovery*" files
         And gpAdminLogs directory has "gpsegsetuprecovery*" files
         And all the segments are running
@@ -432,7 +516,7 @@ Feature: gprecoverseg tests
         When the user runs "gprecoverseg -a -s"
         And gprecoverseg should print "skipping pg_rewind on mirror as standby.signal is present" to stdout
         Then gprecoverseg should return a return code of 0
-        And gpAdminLogs directory has no "pg_rewind*" files
+        And gpAdminLogs directory has "pg_rewind*" files
         And all the segments are running
         And the segments are synchronized
         And the cluster is rebalanced
@@ -516,6 +600,31 @@ Feature: gprecoverseg tests
         And the segments are synchronized
         And the cluster is rebalanced
 
+    Scenario: gprecoverseg recovers segment for valid max-rate options and errors out for others
+      Given the database is running
+        And all the segments are running
+        And the segments are synchronized
+      When user stops all primary processes
+        And user can start transactions
+        And the user runs "gprecoverseg -aF --max-rate 30"
+      Then gprecoverseg should return a return code of 2
+        And gprecoverseg should print "error: transfer rate 30 is out of range" to stdout
+      When the user runs "gprecoverseg -aF --max-rate k35"
+      Then gprecoverseg should return a return code of 2
+        And gprecoverseg should print "error: transfer rate k35 is not a valid value" to stdout
+      When the user runs "gprecoverseg -aF --max-rate 0"
+      Then gprecoverseg should return a return code of 2
+        And gprecoverseg should print "error: Transfer rate must be greater than zero" to stdout
+      When the user runs "gprecoverseg -aF --max-rate 32G"
+      Then gprecoverseg should return a return code of 2
+        And gprecoverseg should print "error: Invalid --max-rate unit: G" to stdout
+      When the user runs "gprecoverseg -aF --max-rate 104857.6k"
+      Then gprecoverseg should return a return code of 0
+        And gprecoverseg should print "Segments successfully recovered" to stdout
+        And gprecoverseg should print "Maximum Transfer Rate.*= 104857.6k" to stdout
+        And the segments are synchronized
+        And the cluster is rebalanced
+
 ########################### @concourse_cluster tests ###########################
 # The @concourse_cluster tag denotes the scenario that requires a remote cluster
     @demo_cluster
@@ -576,7 +685,7 @@ Feature: gprecoverseg tests
       Then gprecoverseg should return a return code of 0
       And gprecoverseg should print "One or more hosts are not reachable via SSH." to stdout
       And gprecoverseg should print "Host invalid_host is unreachable" to stdout
-      And the created config file /tmp/output_config contains the row for unreachable failed segment
+      And the created config file /tmp/output_config contains the commented row for unreachable failed segment
       And the cluster is returned to a good state
 
     @demo_cluster
@@ -759,6 +868,7 @@ Feature: gprecoverseg tests
     And user immediately stops all mirror processes for content 0,1,2
     And the user waits until mirror on content 0,1,2 is down
     And user can start transactions
+    And sql "DROP TABLE IF EXISTS test_recoverseg; CREATE TABLE test_recoverseg AS SELECT generate_series(1,100000000) AS a;" is executed in "postgres" db
     When the user asynchronously runs "gprecoverseg -a --differential" and the process is saved
     Then the user waits until recovery_progress.file is created in gpAdminLogs and verifies its format
     And verify that lines from recovery_progress.file are present in segment progress files in gpAdminLogs
@@ -827,6 +937,7 @@ Feature: gprecoverseg tests
     And all files in gpAdminLogs directory are deleted on all hosts in the cluster
     And user immediately stops all primary processes for content 0,1,2
     And user can start transactions
+    And sql "DROP TABLE IF EXISTS test_recoverseg; CREATE TABLE test_recoverseg AS SELECT generate_series(1,100000000) AS a;" is executed in "postgres" db
     When the user asynchronously runs "gprecoverseg -a --differential" and the process is saved
     Then the user waits until recovery_progress.file is created in gpAdminLogs and verifies its format
     Then verify if the gprecoverseg.lock directory is present in coordinator_data_directory
@@ -889,8 +1000,8 @@ Feature: gprecoverseg tests
     And verify that lines from recovery_progress.file are present in segment progress files in gpAdminLogs
     And the user reset the walsender on the primary on content 0
     And the user waits until saved async process is completed
-    And gpAdminLogs directory has no "pg_basebackup*" files on all segment hosts
-    And gpAdminLogs directory has no "pg_rewind*" files on all segment hosts
+    And gpAdminLogs directory has "pg_basebackup*" files on respective hosts only for content 0,1
+    And gpAdminLogs directory has "pg_rewind*" files on respective hosts only for content 2
     And gpAdminLogs directory has "gpsegsetuprecovery*" files on all segment hosts
     And gpAdminLogs directory has "gpsegrecovery*" files on all segment hosts
     And the cluster is recovered in full and rebalanced
@@ -1050,6 +1161,7 @@ Feature: gprecoverseg tests
     And the user waits until saved async process is completed
     And recovery_progress.file should not exist in gpAdminLogs
     And verify that mirror on content 0,1,2 is up
+    And user can start transactions
     When the user runs gprecoverseg with input file and additional args "-av"
     Then gprecoverseg should print "No basebackup running" to stdout
     And gprecoverseg should return a return code of 0
@@ -1074,7 +1186,7 @@ Feature: gprecoverseg tests
     And check if incremental recovery failed for mirrors with content 0 for gprecoverseg
     And gprecoverseg should print "Failed to recover the following segments. You must run either gprecoverseg --differential or gprecoverseg -F for all incremental failures" to stdout
     And check if incremental recovery was successful for mirrors with content 1,2
-    And gpAdminLogs directory has no "pg_basebackup*" files on all segment hosts
+    And gpAdminLogs directory has "pg_rewind*" files on all segment hosts
     And gpAdminLogs directory has "gpsegsetuprecovery*" files on all segment hosts
     And gpAdminLogs directory has "gpsegrecovery*" files on all segment hosts
 
@@ -1099,7 +1211,7 @@ Feature: gprecoverseg tests
     And gprecoverseg should print "Failed to recover the following segments. You must run either gprecoverseg --differential or gprecoverseg -F for all differential failures" to stdout
     And verify that mirror on content 1,2 is up
     And the segments are synchronized for content 1,2
-    And gpAdminLogs directory has no "pg_basebackup*" files on all segment hosts
+    And gpAdminLogs directory has "rsync*" files on all segment hosts
     And gpAdminLogs directory has "gpsegsetuprecovery*" files on all segment hosts
     And gpAdminLogs directory has "gpsegrecovery*" files on all segment hosts
     And the temporary directory is removed
@@ -1313,6 +1425,8 @@ Feature: gprecoverseg tests
     And check if incremental recovery failed for mirrors with content 0 for gprecoverseg
     And check if full recovery was successful for mirrors with content 1
     And check if full recovery failed for mirrors with content 2 for gprecoverseg
+    And gprecoverseg should print "error:.*required WAL directory ""pg_wal"" does not exist" to stdout
+    And gprecoverseg should print "error: pg_basebackup: error: could not access directory.* Permission denied" to stdout
     And gprecoverseg should not print "Segments successfully recovered" to stdout
     And check if mirrors on content 0,1,2 are in their original configuration
     And the gp_configuration_history table should contain a backout entry for the primary segment for contents 2
@@ -1357,8 +1471,8 @@ Feature: gprecoverseg tests
     And check if incremental recovery was successful for mirrors with content 2
     And check if mirrors on content 0 are moved to new location on input file
     And check if mirrors on content 1,2 are in their original configuration
-    And gpAdminLogs directory has no "pg_basebackup*" files on all segment hosts
-    And gpAdminLogs directory has no "pg_rewind*" files on all segment hosts
+    And gpAdminLogs directory has "pg_basebackup*" files on respective hosts only for content 0,1
+    And gpAdminLogs directory has "pg_rewind*" files on respective hosts only for content 2
     And gpAdminLogs directory has "gpsegsetuprecovery*" files on all segment hosts
     And gpAdminLogs directory has "gpsegrecovery*" files on all segment hosts
     And verify there are no recovery backout files
@@ -1367,6 +1481,7 @@ Feature: gprecoverseg tests
     And the mode of all the created data directories is changed to 0700
     Then the user runs "gprecoverseg -a"
     And gprecoverseg should return a return code of 0
+    And all previous progress files are removed from gpAdminLogs directory on respective hosts only for content 0
     And user can start transactions
     And the segments are synchronized
     And the cluster is rebalanced
@@ -1403,8 +1518,7 @@ Feature: gprecoverseg tests
     And verify that mirror on content 0,1,2 is down
 
     And check if mirrors on content 0,1,2 are moved to new location on input file
-    And gpAdminLogs directory has no "pg_basebackup*" files on all segment hosts
-    And gpAdminLogs directory has no "pg_rewind*" files on all segment hosts
+    And gpAdminLogs directory has "pg_basebackup*" files on all segment hosts
     And gpAdminLogs directory has "gpsegsetuprecovery*" files on all segment hosts
     And gpAdminLogs directory has "gpsegrecovery*" files on all segment hosts
     And verify there are no recovery backout files
@@ -2355,6 +2469,39 @@ Feature: gprecoverseg tests
         And all the segments are running
         And user can start transactions
 
+    @demo_cluster
+    @concourse_cluster
+    Scenario: gprecoverseg reports correct segment startup error messages to stdout
+      Given the database is running
+        And all the segments are running
+        And the segments are synchronized
+        And all files in gpAdminLogs directory are deleted on all hosts in the cluster
+        And user immediately stops all primary processes for content 1
+        And user can start transactions
+        And a gprecoverseg directory under '/tmp' with mode '0700' is created
+        And a gprecoverseg input file is created
+        And edit the input file to recover mirror with content 1 to a new directory on remote host with mode 0755
+      When the user runs gprecoverseg with input file and additional args "-a"
+      Then gprecoverseg should return a return code of 1
+        And user can start transactions
+        And check if start failed for contents 1 during full recovery for gprecoverseg
+        And gprecoverseg should print "Failed to start the following segments" to stdout
+        And gprecoverseg should print "error:.*data directory.* has invalid permissions" to stdout
+        And verify that mirror on content 1 is down
+      When the mode of all the created data directories is non-recursively changed to '0500'
+        And the user runs "gprecoverseg -a"
+      Then gprecoverseg should return a return code of 1
+        And user can start transactions
+        And gprecoverseg should print "Failed to start the following segments" to stdout
+        And gprecoverseg should print "error:.*could not create lock file" to stdout
+        And verify that mirror on content 1 is down
+      When the mode of all the created data directories is changed to 0700
+        And the user runs "gprecoverseg -a"
+      Then gprecoverseg should return a return code of 0
+        And user can start transactions
+        And all the segments are running
+        And the segments are synchronized
+        And the cluster is rebalanced
 
     @remove_rsync_bash
     @concourse_cluster
@@ -2375,4 +2522,4 @@ Feature: gprecoverseg tests
       Given user immediately stops all primary processes for content 0
         And user can start transactions
        Then the row count of table test_recoverseg in "postgres" should be 2000
-       And the cluster is recovered in full and rebalanced
+        And the cluster is recovered in full and rebalanced

@@ -345,6 +345,7 @@ static void appendReloptionsArrayAH(PQExpBuffer buffer, const char *reloptions,
 static char *get_synchronized_snapshot(Archive *fout);
 static void setupDumpWorker(Archive *AHX);
 static TableInfo *getRootTableInfo(const TableInfo *tbinfo);
+static bool forcePartitionRootLoad(const TableInfo *tbinfo);
 
 
 /* START MPP ADDITION */
@@ -940,6 +941,13 @@ main(int argc, char **argv)
 		if (schema_include_oids.head == NULL)
 			fatal("no matching schemas were found");
 	}
+	/*
+	 * As of GPDB7 gp_toolkit is an extension. It gets installed into template1
+	 * when the cluster is initialized by gpinitsystem. For 6 > 7 upgrade we
+	 * assume it will always be present and excluded it from being dumped.
+	 */
+	if (fout->remoteVersion < GPDB7_MAJOR_PGVERSION)
+		simple_string_list_append(&schema_exclude_patterns, "gp_toolkit");
 	expand_schema_name_patterns(fout, &schema_exclude_patterns,
 								&schema_exclude_oids,
 								false);
@@ -1906,20 +1914,49 @@ selectDumpableType(TypeInfo *tyinfo, Archive *fout)
  *		Mark a function as to be dumped or not
  */
 static void
-selectDumpableFunction(FuncInfo *finfo)
+selectDumpableFunction(FuncInfo *finfo, Archive *fout)
 {
+
+	if (checkExtensionMembership(&finfo->dobj, fout))
+		return;					/* extension membership overrides all else */
+
 	/*
 	 * If specific functions are being dumped, dump just those functions; else, dump
 	 * according to the parent namespace's dump flag if parent namespace is not null;
 	 * else, always dump the function.
 	 */
-	if (function_include_oids.head != NULL)
-		finfo->dobj.dump = simple_oid_list_member(&function_include_oids,
-												   finfo->dobj.catId.oid);
+	if (function_include_oids.head != NULL && 
+			simple_oid_list_member(&function_include_oids, finfo->dobj.catId.oid))
+		finfo->dobj.dump = DUMP_COMPONENT_ALL;
 	else if (finfo->dobj.namespace)
 		finfo->dobj.dump = finfo->dobj.namespace->dobj.dump;
 	else
-		finfo->dobj.dump = true;
+		finfo->dobj.dump = DUMP_COMPONENT_ALL;
+}
+
+/*
+ * selectDumpableAggregate: policy-setting subroutine
+ *		Mark a function as to be dumped or not
+ */
+static void
+selectDumpableAggregate(AggInfo *agginfo, Archive *fout)
+{
+
+	if (checkExtensionMembership(&agginfo->aggfn.dobj, fout))
+		return;					/* extension membership overrides all else */
+
+	/*
+	 * If specific aggregates are being dumped, dump just those aggregates; else, dump
+	 * according to the parent namespace's dump flag if parent namespace is not null;
+	 * else, always dump the function.
+	 */
+	if (function_include_oids.head != NULL && 
+			simple_oid_list_member(&function_include_oids, agginfo->aggfn.dobj.catId.oid))
+		agginfo->aggfn.dobj.dump = DUMP_COMPONENT_ALL;
+	else if (agginfo->aggfn.dobj.namespace)
+		agginfo->aggfn.dobj.dump = agginfo->aggfn.dobj.namespace->dobj.dump;
+	else
+		agginfo->aggfn.dobj.dump = DUMP_COMPONENT_ALL;
 }
 
 /*
@@ -2327,11 +2364,13 @@ dumpTableData_insert(Archive *fout, const void *dcontext)
 			insertStmt = createPQExpBuffer();
 
 			/*
-			 * When load-via-partition-root is set, get the root table name
-			 * for the partition table, so that we can reload data through the
-			 * root table.
+			 * When load-via-partition-root is set or forced, get the root
+			 * table name for the partition table, so that we can reload data
+			 * through the root table.
 			 */
-			if (dopt->load_via_partition_root && tbinfo->ispartition)
+			if (tbinfo->ispartition &&
+				(dopt->load_via_partition_root ||
+				 forcePartitionRootLoad(tbinfo)))
 				targettab = getRootTableInfo(tbinfo);
 			else
 				targettab = tbinfo;
@@ -2530,6 +2569,35 @@ getRootTableInfo(const TableInfo *tbinfo)
 }
 
 /*
+ * forcePartitionRootLoad
+ *     Check if we must force load_via_partition_root for this partition.
+ *
+ * This is required if any level of ancestral partitioned table has an
+ * unsafe partitioning scheme.
+ */
+static bool
+forcePartitionRootLoad(const TableInfo *tbinfo)
+{
+	TableInfo  *parentTbinfo;
+
+	Assert(tbinfo->ispartition);
+	Assert(tbinfo->numParents == 1);
+
+	parentTbinfo = tbinfo->parents[0];
+	if (parentTbinfo->unsafe_partitions)
+		return true;
+	while (parentTbinfo->ispartition)
+	{
+		Assert(parentTbinfo->numParents == 1);
+		parentTbinfo = parentTbinfo->parents[0];
+		if (parentTbinfo->unsafe_partitions)
+			return true;
+	}
+
+	return false;
+}
+
+/*
  * dumpTableData -
  *	  dump the contents of a single table
  *
@@ -2543,34 +2611,40 @@ dumpTableData(Archive *fout, const TableDataInfo *tdinfo)
 	PQExpBuffer copyBuf = createPQExpBuffer();
 	PQExpBuffer clistBuf = createPQExpBuffer();
 	DataDumperPtr dumpFn;
+	char	   *tdDefn = NULL;
 	char	   *copyStmt;
 	const char *copyFrom;
 
 	/* We had better have loaded per-column details about this table */
 	Assert(tbinfo->interesting);
 
+	/*
+	 * When load-via-partition-root is set or forced, get the root table name
+	 * for the partition table, so that we can reload data through the root
+	 * table.  Then construct a comment to be inserted into the TOC entry's
+	 * defn field, so that such cases can be identified reliably.
+	 */
+	if (tbinfo->ispartition &&
+		(dopt->load_via_partition_root ||
+		 forcePartitionRootLoad(tbinfo)))
+	{
+		TableInfo  *parentTbinfo;
+
+		parentTbinfo = getRootTableInfo(tbinfo);
+		copyFrom = fmtQualifiedDumpable(parentTbinfo);
+		printfPQExpBuffer(copyBuf, "-- load via partition root %s",
+						  copyFrom);
+		tdDefn = pg_strdup(copyBuf->data);
+	}
+	else
+		copyFrom = fmtQualifiedDumpable(tbinfo);
+
 	if (dopt->dump_inserts == 0)
 	{
 		/* Dump/restore using COPY */
 		dumpFn = dumpTableData_copy;
-
-		/*
-		 * When load-via-partition-root is set, get the root table name for
-		 * the partition table, so that we can reload data through the root
-		 * table.
-		 */
-		if (dopt->load_via_partition_root && tbinfo->ispartition)
-		{
-			TableInfo  *parentTbinfo;
-
-			parentTbinfo = getRootTableInfo(tbinfo);
-			copyFrom = fmtQualifiedDumpable(parentTbinfo);
-		}
-		else
-			copyFrom = fmtQualifiedDumpable(tbinfo);
-
 		/* must use 2 steps here 'cause fmtId is nonreentrant */
-		appendPQExpBuffer(copyBuf, "COPY %s ",
+		printfPQExpBuffer(copyBuf, "COPY %s ",
 						  copyFrom);
 		appendPQExpBuffer(copyBuf, "%s FROM stdin;\n",
 						  fmtCopyColumnList(tbinfo, clistBuf));
@@ -2598,6 +2672,7 @@ dumpTableData(Archive *fout, const TableDataInfo *tdinfo)
 									   .owner = tbinfo->rolname,
 									   .description = "TABLE DATA",
 									   .section = SECTION_DATA,
+									   .createStmt = tdDefn,
 									   .copyStmt = copyStmt,
 									   .deps = &(tbinfo->dobj.dumpId),
 									   .nDeps = 1,
@@ -3847,6 +3922,7 @@ void
 getPolicies(Archive *fout, TableInfo tblinfo[], int numTables)
 {
 	PQExpBuffer query;
+	PQExpBuffer tbloids;
 	PGresult   *res;
 	PolicyInfo *polinfo;
 	int			i_oid;
@@ -3862,15 +3938,17 @@ getPolicies(Archive *fout, TableInfo tblinfo[], int numTables)
 				j,
 				ntups;
 
+	/* No policies before 9.5 */
 	if (fout->remoteVersion < 90500)
 		return;
 
 	query = createPQExpBuffer();
+	tbloids = createPQExpBuffer();
 
 	/*
-	 * First, check which tables have RLS enabled.  We represent RLS being
-	 * enabled on a table by creating a PolicyInfo object with null polname.
+	 * Identify tables of interest, and check which ones have RLS enabled.
 	 */
+	appendPQExpBufferChar(tbloids, '{');
 	for (i = 0; i < numTables; i++)
 	{
 		TableInfo  *tbinfo = &tblinfo[i];
@@ -3879,11 +3957,25 @@ getPolicies(Archive *fout, TableInfo tblinfo[], int numTables)
 		if (!(tbinfo->dobj.dump & DUMP_COMPONENT_POLICY))
 			continue;
 
+		/* It can't have RLS or policies if it's not a table */
+		if (tbinfo->relkind != RELKIND_RELATION &&
+			tbinfo->relkind != RELKIND_PARTITIONED_TABLE)
+			continue;
+
+		/* Add it to the list of table OIDs to be probed below */
+		if (tbloids->len > 1)	/* do we have more than the '{'? */
+			appendPQExpBufferChar(tbloids, ',');
+		appendPQExpBuffer(tbloids, "%u", tbinfo->dobj.catId.oid);
+
+		/* Is RLS enabled?  (That's separate from whether it has policies) */
 		if (tbinfo->rowsec)
 		{
 			tbinfo->dobj.components |= DUMP_COMPONENT_POLICY;
 
 			/*
+			 * We represent RLS being enabled on a table by creating a
+			 * PolicyInfo object with null polname.
+			 *
 			 * Note: use tableoid 0 so that this object won't be mistaken for
 			 * something that pg_depend entries apply to.
 			 */
@@ -3903,15 +3995,18 @@ getPolicies(Archive *fout, TableInfo tblinfo[], int numTables)
 			polinfo->polwithcheck = NULL;
 		}
 	}
+	appendPQExpBufferChar(tbloids, '}');
 
 	/*
-	 * Now, read all RLS policies, and create PolicyInfo objects for all those
-	 * that are of interest.
+	 * Now, read all RLS policies belonging to the tables of interest, and
+	 * create PolicyInfo objects for them.  (Note that we must filter the
+	 * results server-side not locally, because we dare not apply pg_get_expr
+	 * to tables we don't have lock on.)
 	 */
 	pg_log_info("reading row-level security policies");
 
 	printfPQExpBuffer(query,
-					  "SELECT oid, tableoid, pol.polrelid, pol.polname, pol.polcmd, ");
+					  "SELECT pol.oid, pol.tableoid, pol.polrelid, pol.polname, pol.polcmd, ");
 	if (fout->remoteVersion >= 100000)
 		appendPQExpBuffer(query, "pol.polpermissive, ");
 	else
@@ -3921,7 +4016,9 @@ getPolicies(Archive *fout, TableInfo tblinfo[], int numTables)
 					  "   pg_catalog.array_to_string(ARRAY(SELECT pg_catalog.quote_ident(rolname) from pg_catalog.pg_roles WHERE oid = ANY(pol.polroles)), ', ') END AS polroles, "
 					  "pg_catalog.pg_get_expr(pol.polqual, pol.polrelid) AS polqual, "
 					  "pg_catalog.pg_get_expr(pol.polwithcheck, pol.polrelid) AS polwithcheck "
-					  "FROM pg_catalog.pg_policy pol");
+					  "FROM unnest('%s'::pg_catalog.oid[]) AS src(tbloid)\n"
+					  "JOIN pg_catalog.pg_policy pol ON (src.tbloid = pol.polrelid)",
+					  tbloids->data);
 
 	res = ExecuteSqlQuery(fout, query->data, PGRES_TUPLES_OK);
 
@@ -3944,13 +4041,6 @@ getPolicies(Archive *fout, TableInfo tblinfo[], int numTables)
 		{
 			Oid			polrelid = atooid(PQgetvalue(res, j, i_polrelid));
 			TableInfo  *tbinfo = findTableByOid(polrelid);
-
-			/*
-			 * Ignore row security on tables not to be dumped.  (This will
-			 * result in some harmless wasted slots in polinfo[].)
-			 */
-			if (!(tbinfo->dobj.dump & DUMP_COMPONENT_POLICY))
-				continue;
 
 			tbinfo->dobj.components |= DUMP_COMPONENT_POLICY;
 
@@ -3988,6 +4078,7 @@ getPolicies(Archive *fout, TableInfo tblinfo[], int numTables)
 	PQclear(res);
 
 	destroyPQExpBuffer(query);
+	destroyPQExpBuffer(tbloids);
 }
 
 /*
@@ -5995,7 +6086,7 @@ getAggregates(Archive *fout, int *numAggs)
 		}
 
 		/* Decide whether we want to dump it */
-		selectDumpableObject(&(agginfo[i].aggfn.dobj), fout);
+		selectDumpableAggregate(&(agginfo[i]), fout);
 
 		/* Mark whether aggregate has an ACL */
 		if (!PQgetisnull(res, i, i_aggacl))
@@ -6328,8 +6419,7 @@ getFuncs(Archive *fout, int *numFuncs)
 		}
 
 		/* Decide whether we want to dump it */
-		selectDumpableFunction(&finfo[i]);
-		selectDumpableObject(&(finfo[i].dobj), fout);
+		selectDumpableFunction(&finfo[i], fout);
 
 		/* Mark whether function has an ACL */
 		if (!PQgetisnull(res, i, i_proacl))
@@ -7255,6 +7345,77 @@ getPartitionDefs(Archive *fout, TableInfo tblinfo[], int numTables)
 }
 
 /*
+ * getPartitioningInfo
+ *	  get information about partitioning
+ *
+ * For the most part, we only collect partitioning info about tables we
+ * intend to dump.  However, this function has to consider all partitioned
+ * tables in the database, because we need to know about parents of partitions
+ * we are going to dump even if the parents themselves won't be dumped.
+ *
+ * Specifically, what we need to know is whether each partitioned table
+ * has an "unsafe" partitioning scheme that requires us to force
+ * load-via-partition-root mode for its children.  Currently the only case
+ * for which we force that is hash partitioning on enum columns, since the
+ * hash codes depend on enum value OIDs which won't be replicated across
+ * dump-and-reload.  There are other cases in which load-via-partition-root
+ * might be necessary, but we expect users to cope with them.
+ */
+void
+getPartitioningInfo(Archive *fout)
+{
+	PQExpBuffer query;
+	PGresult   *res;
+	int			ntups;
+
+	/* hash partitioning didn't exist before v11 */
+	if (fout->remoteVersion < 110000)
+		return;
+	/* needn't bother if schema-only dump */
+	if (fout->dopt->schemaOnly)
+		return;
+
+	query = createPQExpBuffer();
+
+	/*
+	 * Unsafe partitioning schemes are exactly those for which hash enum_ops
+	 * appears among the partition opclasses.  We needn't check partstrat.
+	 *
+	 * Note that this query may well retrieve info about tables we aren't
+	 * going to dump and hence have no lock on.  That's okay since we need not
+	 * invoke any unsafe server-side functions.
+	 */
+	appendPQExpBufferStr(query,
+						 "SELECT partrelid FROM pg_partitioned_table WHERE\n"
+						 "(SELECT c.oid FROM pg_opclass c JOIN pg_am a "
+						 "ON c.opcmethod = a.oid\n"
+						 "WHERE opcname = 'enum_ops' "
+						 "AND opcnamespace = 'pg_catalog'::regnamespace "
+						 "AND amname = 'hash') = ANY(partclass)");
+
+	res = ExecuteSqlQuery(fout, query->data, PGRES_TUPLES_OK);
+
+	ntups = PQntuples(res);
+
+	for (int i = 0; i < ntups; i++)
+	{
+		Oid			tabrelid = atooid(PQgetvalue(res, i, 0));
+		TableInfo  *tbinfo;
+
+		tbinfo = findTableByOid(tabrelid);
+		if (tbinfo == NULL)
+			fatal("failed sanity check, table OID %u appearing in pg_partitioned_table not found",
+				  tabrelid);
+		tbinfo->unsafe_partitions = true;
+	}
+
+	PQclear(res);
+
+	destroyPQExpBuffer(query);
+
+}
+
+/*
  * getIndexes
  *	  get information about every index on a dumpable table
  *
@@ -8136,7 +8297,7 @@ getTriggers(Archive *fout, TableInfo tblinfo[], int numTables)
 						  "SELECT t.tgrelid, t.tgname, "
 						  "t.tgfoid::pg_catalog.regproc AS tgfname, "
 						  "pg_catalog.pg_get_triggerdef(t.oid, false) AS tgdef, "
-						  "t.tgenabled, t.tableoid, t.oid "
+						  "t.tgenabled, t.tableoid, t.oid, false as tgisinternal "
 						  "FROM unnest('%s'::pg_catalog.oid[]) AS src(tbloid)\n"
 						  "JOIN pg_catalog.pg_trigger t ON (src.tbloid = t.tgrelid) "
 						  "WHERE NOT t.tgisinternal "
@@ -14884,10 +15045,7 @@ dumpExtProtocol(Archive *fout, ExtProtInfo *ptcinfo)
 	 * qualified with namespace, we must ensure that we have the search_path
 	 * set with the namespaces of the referenced functions. We only need the
 	 * dump file to have the search_path so inject a SET search_path = .. ;
-	 * into the output stream instead of calling selectSourceSchema().
-	 *
-	 * GPDB_96_MERGE_FIXME: update the above comment because selectSourceSchema
-	 * has been removed in upstream 9f6e5296a  Security: CVE-2018-1058
+	 * into the output stream.
 	 */
 	prev_ns = NULL;
 	for (i = 0; i < FCOUNT; i++)

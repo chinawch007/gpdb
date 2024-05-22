@@ -28,6 +28,16 @@ FROM
     )a, relfilenodecheck b
 WHERE b.casename LIKE $1 and b.relname LIKE $2 and a.segid = b.segid;
 
+-- we skip the activity checks in gp_toolkit.gp_check_orphaned_files as that could make the test flaky
+PREPARE check_orphaned_file_skip_activity AS
+SELECT pg_catalog.gp_execution_segment() AS gp_segment_id, *
+FROM gp_dist_random('gp_toolkit.__check_orphaned_files')
+WHERE split_part(filename,'.',1) = (SELECT oid::text FROM pg_class WHERE relname = $1)
+UNION ALL
+SELECT -1 AS gp_segment_id, *
+FROM gp_toolkit.__check_orphaned_files
+WHERE split_part(filename,'.',1) = (SELECT oid::text FROM pg_class WHERE relname = $1);
+
 --------------------------------------------------------------------------------
 -- Test if ALTER COLUMN TYPE and ADD COLUMN on AOCO doesn't rewrite the entire table
 --------------------------------------------------------------------------------
@@ -58,7 +68,7 @@ EXECUTE attribute_encoding_check ('alter_type_aoco');
 SELECT * FROM gp_toolkit.__gp_aocsseg('alter_type_aoco') ORDER BY segment_id, column_num;
 DROP TABLE alter_type_aoco;
 -- check if all files are dropped correctly
-SELECT count(*) FROM gp_toolkit.gp_check_orphaned_files WHERE split_part(filename,'.',1) = (SELECT oid::text FROM pg_class WHERE relname = 'alter_type_aoco');
+EXECUTE check_orphaned_file_skip_activity('alter_type_aoco');
 
 --------------------------------------------------------------------------------
 -- Test if column rewrite handles deleted rows in blockdirectory correctly for
@@ -246,7 +256,7 @@ EXECUTE checkrelfilenodediff ('alter_column_b', 'part_alter_col_1_prt_aa_1_c_idx
 SELECT * FROM part_alter_col;
 DROP TABLE part_alter_col;
 -- check if all files are dropped correctly
-SELECT count(*) FROM gp_toolkit.gp_check_orphaned_files WHERE split_part(filename,'.',1) = (SELECT oid::text FROM pg_class WHERE relname = 'part_alter_col');
+EXECUTE check_orphaned_file_skip_activity('part_alter_col');
 --------------------------------------------------------------------------------
 -- Test if column rewrite works when AT ALTER COLUMN TYPE for a column
 -- and then alter it back to the original type
@@ -280,7 +290,7 @@ SELECT atttypid::regtype FROM pg_attribute WHERE attrelid='alter_column_back'::r
 SELECT * FROM alter_column_back;
 DROP TABLE alter_column_back;
 -- check if all files are dropped correctly
-SELECT count(*) FROM gp_toolkit.gp_check_orphaned_files WHERE split_part(filename,'.',1) = (SELECT oid::text FROM pg_class WHERE relname = 'alter_column_back');
+EXECUTE check_orphaned_file_skip_activity('alter_column_back');
 
 --------------------------------------------------------------------------------
 -- Test if ALTER COLUMN TYPE and SET ACCESS METHOD can be done in the same command
@@ -332,6 +342,8 @@ INSERT INTO alter_column_other VALUES (1,2,3);
 EXECUTE capturerelfilenodebefore ('alter_column_other', 'alter_column_other');
 EXECUTE attribute_encoding_check ('alter_column_other');
 
+-- ALTER TYPE and adding constraint can be done together when rewriting column-only. No table rewrite.
+-- SET DEFAULT is essentially adding a constraint.
 ALTER TABLE alter_column_other ALTER COLUMN b TYPE text, ALTER COLUMN c SET DEFAULT 5;
 
 EXECUTE attribute_encoding_check ('alter_column_other');
@@ -365,7 +377,7 @@ ALTER TABLE alter_column_constraints ALTER COLUMN b TYPE bigint;
 EXECUTE checkrelfilenodediff ('alter_column_constraints_col_rewrite', 'alter_column_constraints');
 
 EXECUTE capturerelfilenodebefore ('alter_column_constraints_fullrewrite', 'alter_column_constraints');
--- should succeed and relfile changed (not using the column rewrite optimization because there's other command)
+-- should succeed and no table rewrite
 ALTER TABLE alter_column_constraints ADD CONSTRAINT checkb2 CHECK (b < 100), ALTER COLUMN b TYPE int;
 EXECUTE checkrelfilenodediff ('alter_column_constraints_fullrewrite', 'alter_column_constraints');
 
@@ -378,14 +390,12 @@ CREATE TABLE alter_column_seg0(a int, b int) USING ao_column;
 1: ALTER TABLE alter_column_seg0 ADD COLUMN c int;
 1: INSERT INTO alter_column_seg0 SELECT 1,i,i FROM generate_series(1,10)i;
 1: COMMIT;
--- gp_toolkit.gp_check_orphaned_files later requires that there's no concurrent sessions
-1q:
 INSERT INTO alter_column_seg0 SELECT 1,i,i FROM generate_series(1,10)i;
 ALTER TABLE alter_column_seg0 ALTER COLUMN b TYPE text;
 SELECT count(*) FROM alter_column_seg0;
 SELECT * FROM gp_toolkit.__gp_aocsseg('alter_column_seg0');
 DROP TABLE alter_column_seg0;
-SELECT count(*) FROM gp_toolkit.gp_check_orphaned_files WHERE split_part(filename,'.',1) = (SELECT oid::text FROM pg_class WHERE relname = 'alter_column_seg0');
+EXECUTE check_orphaned_file_skip_activity('alter_column_seg0');
 
 --------------------------------------------------------------------------------
 -- Test if ALTER COLUMN TYPE works correctly multiple segfiles are created
@@ -405,7 +415,7 @@ ALTER TABLE alter_column_multiple_concurrency ALTER COLUMN b TYPE text;
 SELECT count(*) FROM alter_column_multiple_concurrency;
 SELECT * FROM gp_toolkit.__gp_aocsseg('alter_column_multiple_concurrency');
 DROP TABLE alter_column_multiple_concurrency;
-SELECT count(*) FROM gp_toolkit.gp_check_orphaned_files WHERE split_part(filename,'.',1) = (SELECT oid::text FROM pg_class WHERE relname = 'alter_column_multiple_concurrency');
+EXECUTE check_orphaned_file_skip_activity('alter_column_multiple_concurrency');
 
 --------------------------------------------------------------------------------
 -- Test if ALTER COLUMN TYPE works correctly when a segfile is in AWAITING_DROP state
@@ -427,9 +437,7 @@ ALTER TABLE alter_column_awaiting_drop ALTER COLUMN b TYPE text;
 SELECT count(*) FROM alter_column_awaiting_drop;
 SELECT * FROM gp_toolkit.__gp_aocsseg('alter_column_awaiting_drop');
 DROP TABLE alter_column_awaiting_drop;
--- VACUUM seems to incur some left-over session, wait a little while for that to go away to placate gp_check_orphaned_files
-SELECT pg_sleep(3);
-SELECT count(*) FROM gp_toolkit.gp_check_orphaned_files WHERE split_part(filename,'.',1) = (SELECT oid::text FROM pg_class WHERE relname = 'alter_column_awaiting_drop');
+EXECUTE check_orphaned_file_skip_activity('alter_column_awaiting_drop');
 
 --------------------------------------------------------------------------------
 -- Test if ALTER COLUMN TYPE works correctly for 0 inserted rows
@@ -447,7 +455,7 @@ ALTER TABLE alter_column_zero_tupcount ALTER COLUMN b TYPE text;
 SELECT count(*) FROM alter_column_zero_tupcount;
 SELECT * FROM gp_toolkit.__gp_aocsseg('alter_column_zero_tupcount');
 DROP TABLE alter_column_zero_tupcount;
-SELECT count(*) FROM gp_toolkit.gp_check_orphaned_files WHERE split_part(filename,'.',1) = (SELECT oid::text FROM pg_class WHERE relname = 'alter_column_zero_tupcount');
+EXECUTE check_orphaned_file_skip_activity('alter_column_zero_tupcount');
 
 --------------------------------------------------------------------------------
 -- Test if ALTER COLUMN TYPE works correctly for generated columns.
@@ -586,6 +594,134 @@ execute attribute_encoding_check('atsetenc');
 
 -- results all good
 select * from atsetenc;
+
+-- 6. GENERATED new column value by existing column
+drop table if exists ataddcolgenerated;
+create table ataddcolgenerated (a int, b text) using ao_column;
+insert into ataddcolgenerated select i,'str_' || i::text from generate_series(1, 5)i;
+select * from ataddcolgenerated;
+alter table ataddcolgenerated add column c int generated always as (a * a) stored;
+alter table ataddcolgenerated add column d text generated always as (a::text || ',' || a::text) stored;
+alter table ataddcolgenerated add column e text generated always as (right(b, 2)) stored;
+-- with UDF
+create or replace function pylen(a text) returns int as $$
+return (len(a.split('_')))
+$$ immutable language plpython3u;
+alter table ataddcolgenerated add column f int generated always as (pylen(b)) stored;
+select * from ataddcolgenerated;
+-- external table
+drop external table if exists ataddcolgeneratedext;
+create external web table ataddcolgeneratedext (a int, b text) execute 'echo 1, str_1' on coordinator format 'csv';
+select * from ataddcolgeneratedext;
+alter table ataddcolgeneratedext add column c int generated always as (a * a) stored;
+alter table ataddcolgeneratedext add column d text generated always as (a::text || ',' || a::text) stored;
+alter table ataddcolgeneratedext add column e int generated always as (pylen(b)) stored;
+select * from ataddcolgeneratedext;
+alter table ataddcolgeneratedext add column f int default 10;
+select * from ataddcolgeneratedext;
+-- partitioned table
+drop table if exists ataddcolgenpart;
+create table ataddcolgenpart(a int, b text, c int) using ao_column partition by range (c) (start(1) end(11) every (2));
+insert into ataddcolgenpart select i,'str_' || i::text,i from generate_series(1, 10)i;
+select * from ataddcolgenpart;
+alter table ataddcolgenpart add column d text generated always as ('d') stored;
+alter table ataddcolgenpart add column e text generated always as (a::text || ',' || right(b, 2)) stored;
+alter table ataddcolgenpart add column f text generated always as (pylen(b)) stored;
+select * from ataddcolgenpart;
+-- mixed partitions: case1, parent on ao_column, children on heap, ao_row, ao_column
+drop table if exists aocomixedpart;
+create table aocomixedpart (a int, b text, c int) with (appendonly=true, orientation=column) partition by range(c)
+(
+    start (1) end (6) with (appendonly=false),
+    start (6) end (11) with (appendonly=true, orientation=row),
+    start (11) end (16) with (appendonly=true, orientation=column),
+    start (16) end (21) with (appendonly=false),
+    start (21) end (26) with (appendonly=true, orientation=row),
+    start (26) end (31) with (appendonly=true, orientation=column)
+);
+insert into aocomixedpart select i,'str_' || i::text,i from generate_series(1, 30)i;
+alter table aocomixedpart add column d text generated always as ('d') stored;
+alter table aocomixedpart add column e text generated always as (a::text || ',' || right(b, 2)) stored;
+alter table aocomixedpart add column f text generated always as (pylen(b)) stored;
+select * from aocomixedpart;
+-- mixed partitions: case2, parent on ao_row, children on heap, ao_row, ao_column, attach external partition
+drop table if exists aocomixedpart;
+create table aocomixedpart (a int, b text, c int) with (appendonly=true, orientation=row) partition by range(c)
+(
+    start (1) end (6) with (appendonly=false),
+    start (6) end (11) with (appendonly=true, orientation=row),
+    start (11) end (16) with (appendonly=true, orientation=column),
+    start (16) end (21) with (appendonly=false),
+    start (21) end (26) with (appendonly=true, orientation=row),
+    start (26) end (31) with (appendonly=true, orientation=column)
+);
+insert into aocomixedpart select i,'str_' || i::text,i from generate_series(1, 30)i;
+-- external partition
+drop external table if exists ataddcolgeneratedext;
+create external web table ataddcolgeneratedext (a int, b text, c int) execute 'echo 21,str_21,21' on coordinator format 'csv';
+alter table aocomixedpart attach partition ataddcolgeneratedext for values from (31) to (36);
+select * from aocomixedpart;
+alter table aocomixedpart add column d text generated always as ('d') stored;
+alter table aocomixedpart add column e text generated always as (a::text || ',' || right(b, 2)) stored;
+alter table aocomixedpart add column f text generated always as (pylen(b)) stored;
+select * from aocomixedpart;
+-- mixed partitions: case3, parent on heap, children on heap, ao_row, ao_column, exchange with external partition
+drop table if exists aocomixedpart;
+create table aocomixedpart (a int, b text, c int) with (appendonly=false) partition by range(c)
+(
+    start (1) end (6) with (appendonly=false),
+    start (6) end (11) with (appendonly=true, orientation=row),
+    start (11) end (16) with (appendonly=true, orientation=column),
+    start (16) end (21) with (appendonly=false),
+    start (21) end (26) with (appendonly=true, orientation=row)
+);
+alter table aocomixedpart add partition exch_part start (26) end (31);
+insert into aocomixedpart select i,'str_' || i::text,i from generate_series(1, 30)i;
+-- external partition
+drop external table if exists ataddcolgeneratedext;
+create external web table ataddcolgeneratedext (a int, b text, c int) execute 'echo 21,str_21,21' on coordinator format 'csv';
+alter table aocomixedpart exchange partition exch_part with table ataddcolgeneratedext;
+select * from aocomixedpart;
+alter table aocomixedpart add column d text generated always as ('d') stored;
+alter table aocomixedpart add column e text generated always as (a::text || ',' || right(b, 2)) stored;
+alter table aocomixedpart add column f text generated always as (pylen(b)) stored;
+select * from aocomixedpart;
+-- multiple sub-commands containing both add-column and rewrite-column
+drop table if exists ataddcolgenerated;
+create table ataddcolgenerated (a int, b text) using ao_column;
+insert into ataddcolgenerated select i,'str_' || i::text from generate_series(1, 5)i;
+select * from ataddcolgenerated;
+alter table ataddcolgenerated add column c int generated always as (a * a) stored;
+select * from ataddcolgenerated;
+alter table ataddcolgenerated add column d text generated always as (a::text || ',' || a::text) stored, alter column c type text;
+select * from ataddcolgenerated;
+-- multiple sub-commands containing both add-column and rewrite-column, mixed partitioned table
+drop table if exists aocomixedpart;
+create table aocomixedpart (a int, b text, c int) with (appendonly=true, orientation=column) partition by range(c)
+(
+    start (1) end (6) with (appendonly=false),
+    start (6) end (11) with (appendonly=true, orientation=row),
+    start (11) end (16) with (appendonly=true, orientation=column),
+    start (16) end (21) with (appendonly=false),
+    start (21) end (26) with (appendonly=true, orientation=row),
+    start (26) end (31) with (appendonly=true, orientation=column)
+);
+insert into aocomixedpart select i,'str_' || i::text,i from generate_series(1, 30)i;
+drop external table if exists aocomixedpartext;
+create external web table aocomixedpartext (a int, b text, c int) execute 'echo 31,str_31,31' on coordinator format 'csv';
+alter table aocomixedpart attach partition aocomixedpartext for values from (31) to (36);
+select * from aocomixedpart;
+alter table aocomixedpart add column d text generated always as (a) stored;
+alter table aocomixedpart add column e text generated always as (a::text || ',' || right(b, 2)) stored, alter column d type text;
+select * from aocomixedpart;
+-- multiple sub-commands containing both add-column and rewrite-column, pure aoco tables
+drop table if exists ataddcolgenpart;
+create table ataddcolgenpart(a int, b text, c int) using ao_column partition by range (c) (start(1) end(11) every (2));
+insert into ataddcolgenpart select i,'str_' || i::text,i from generate_series(1, 10)i;
+select * from ataddcolgenpart;
+alter table ataddcolgenpart add column d text generated always as (a) stored;
+alter table ataddcolgenpart alter column d type varchar, add column e text generated always as (c) stored, alter column b set encoding (compresstype=zlib, compresslevel=5);
+select * from ataddcolgenpart;
 
 --
 -- partition table

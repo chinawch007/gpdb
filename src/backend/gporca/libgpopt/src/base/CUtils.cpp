@@ -1162,18 +1162,6 @@ CUtils::FPhysicalJoin(COperator *pop)
 	return FHashJoin(pop) || FNLJoin(pop);
 }
 
-// check if a given operator is a physical left outer join
-BOOL
-CUtils::FPhysicalLeftOuterJoin(COperator *pop)
-{
-	GPOS_ASSERT(nullptr != pop);
-
-	return COperator::EopPhysicalLeftOuterNLJoin == pop->Eopid() ||
-		   COperator::EopPhysicalLeftOuterIndexNLJoin == pop->Eopid() ||
-		   COperator::EopPhysicalLeftOuterHashJoin == pop->Eopid() ||
-		   COperator::EopPhysicalCorrelatedLeftOuterNLJoin == pop->Eopid();
-}
-
 // check if a given operator is a physical agg
 BOOL
 CUtils::FPhysicalScan(COperator *pop)
@@ -2189,14 +2177,15 @@ CUtils::PexprLogicalSelect(CMemoryPool *mp, CExpression *pexpr,
 	GPOS_ASSERT(nullptr != pexprPredicate);
 
 	CTableDescriptor *ptabdesc = nullptr;
-	if (pexpr->Pop()->Eopid() == CLogical::EopLogicalSelect ||
-		pexpr->Pop()->Eopid() == CLogical::EopLogicalGet ||
+	if (pexpr->Pop()->Eopid() == CLogical::EopLogicalGet ||
 		pexpr->Pop()->Eopid() == CLogical::EopLogicalDynamicGet)
 	{
-		ptabdesc = pexpr->DeriveTableDescriptor();
-		// there are some cases where we don't populate LogicalSelect currently
-		GPOS_ASSERT_IMP(pexpr->Pop()->Eopid() != CLogical::EopLogicalSelect,
-						nullptr != ptabdesc);
+		ptabdesc = pexpr->DeriveTableDescriptor()->First();
+		GPOS_ASSERT(nullptr != ptabdesc);
+	}
+	else if (pexpr->Pop()->Eopid() == CLogical::EopLogicalSelect)
+	{
+		ptabdesc = CLogicalSelect::PopConvert(pexpr->Pop())->Ptabdesc();
 	}
 	return GPOS_NEW(mp) CExpression(
 		mp, GPOS_NEW(mp) CLogicalSelect(mp, ptabdesc), pexpr, pexprPredicate);
@@ -5033,5 +5022,34 @@ CUtils::AddExprs(CExpressionArrays *results_exprs,
 		results_exprs->Append(exprs);
 	}
 	GPOS_ASSERT(results_exprs->Size() >= input_exprs->Size());
+}
+
+
+// Given a table desriptor set, return a new table descriptor set without
+// duplicate mdids. This can happen if there is more than one table desriptor
+// for the same table, but using different alias names.
+CTableDescriptorHashSet *
+CUtils::RemoveDuplicateMdids(CMemoryPool *mp, CTableDescriptorHashSet *tabdescs)
+{
+	GPOS_ASSERT(nullptr != tabdescs);
+	CTableDescriptorHashSet *result = GPOS_NEW(mp) CTableDescriptorHashSet(mp);
+
+	MdidHashSet *mdids = GPOS_NEW(mp) MdidHashSet(mp);
+	CTableDescriptorHashSetIter hsiter(tabdescs);
+	while (hsiter.Advance())
+	{
+		CTableDescriptor *tabdesc =
+			const_cast<CTableDescriptor *>(hsiter.Get());
+		if (mdids->Insert(tabdesc->MDId()))
+		{
+			tabdesc->MDId()->AddRef();
+			if (result->Insert(tabdesc))
+			{
+				tabdesc->AddRef();
+			}
+		}
+	}
+	mdids->Release();
+	return result;
 }
 // EOF

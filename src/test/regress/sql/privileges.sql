@@ -177,9 +177,6 @@ EXPLAIN (COSTS OFF) SELECT * FROM atest12 x, atest12 y
 
 -- This should also be a nestloop, but the security barrier forces the inner
 -- scan to be materialized
--- set optimizer_trace_fallback for below queries, as the "Query Parameter not supported"
--- fallback message may appear multiple times and is not deterministic
-set optimizer_trace_fallback=off;
 EXPLAIN (COSTS OFF) SELECT * FROM atest12sbv x, atest12sbv y WHERE x.a = y.b;
 
 -- Check if regress_priv_user2 can break security.
@@ -208,7 +205,6 @@ EXPLAIN (COSTS OFF) SELECT * FROM atest12v x, atest12v y
 EXPLAIN (COSTS OFF) SELECT * FROM atest12sbv x, atest12sbv y
   WHERE x.a = y.b and abs(y.a) <<< 5;
 
-set optimizer_trace_fallback=on;
 -- Now regress_priv_user1 grants sufficient access to regress_priv_user2.
 SET SESSION AUTHORIZATION regress_priv_user1;
 GRANT SELECT (a, b) ON atest12 TO PUBLIC;
@@ -1587,6 +1583,11 @@ LOCK TABLE lock_table IN ACCESS EXCLUSIVE MODE; -- should pass
 COMMIT;
 \c
 REVOKE TRUNCATE ON lock_table FROM regress_locktable_user;
+
+-- regression test: superuser create a schema and authorize it to a non-superuser
+DROP ROLE IF EXISTS "non_superuser_schema";
+CREATE ROLE "non_superuser_schema";
+CREATE SCHEMA test_non_superuser_schema AUTHORIZATION "non_superuser_schema";
 
 -- clean up
 DROP TABLE lock_table;

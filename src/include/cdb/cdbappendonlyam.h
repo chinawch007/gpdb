@@ -36,6 +36,7 @@
 #include "utils/snapshot.h"
 
 #include "access/appendonlytid.h"
+#include "access/appendonlywriter.h"
 
 #include "cdb/cdbbufferedappend.h"
 #include "cdb/cdbbufferedread.h"
@@ -52,6 +53,17 @@
 #define MAX_APPENDONLY_BLOCK_SIZE			 (2 * 1024 * 1024)
 #define DEFAULT_VARBLOCK_TEMPSPACE_LEN   	 (4 * 1024)
 #define DEFAULT_FS_SAFE_WRITE_SIZE			 (0)
+#define DEFAULT_COMPRESS_TYPE				("none")
+
+/*
+ * Check if an attribute value is missing in an AO/CO row according to the row number
+ * and the mapping from attnum to "lastrownum" for the corresponding table/segment.
+ *
+ * See comment for AppendOnlyExecutorReadBlock_BindingInit() for an explanation 
+ * on AO tables, which applies to CO tables as well.
+ */
+#define AO_ATTR_VAL_IS_MISSING(rowNum, colno, segmentFileNum, attnum_to_rownum) \
+		((rowNum) <= (attnum_to_rownum)[(colno) * MAX_AOREL_CONCURRENCY + (segmentFileNum)])
 
 extern AppendOnlyBlockDirectory *GetAOBlockDirectory(Relation relation);
 
@@ -241,6 +253,8 @@ typedef struct AppendOnlyScanDescData
 	 * which starts from 0.
 	 * In other words, if we have seg0 rownums: [1, 100], seg1 rownums: [1, 200]
 	 * If targrow = 150, then we are referring to seg1's rownum=51.
+	 *
+	 * In the context of TABLESAMPLE, this is the next row to be sampled.
 	 */
 	int64				targrow;
 
@@ -268,6 +282,19 @@ typedef struct AppendOnlyScanDescData
 	 */
 	int64		totalBytesRead;
 
+	/*
+	 * The next block of AO_MAX_TUPLES_PER_HEAP_BLOCK tuples to be considered
+	 * for TABLESAMPLE. This only corresponds to tuples that are physically
+	 * present in segfiles (excludes aborted tuples). This "block" is purely a
+	 * logical grouping of tuples (in the flat row number space spanning segs).
+	 * It does NOT correspond to the concept of a "logical heap block" (block
+	 * number in a ctid).
+	 *
+	 * The choice of AO_MAX_TUPLES_PER_HEAP_BLOCK is somewhat arbitrary. It
+	 * could have been anything (that can be represented with an OffsetNumber,
+	 * to comply with the TSM API).
+	 */
+	int64 		sampleTargetBlk;
 }	AppendOnlyScanDescData;
 
 typedef AppendOnlyScanDescData *AppendOnlyScanDesc;
@@ -411,7 +438,10 @@ typedef struct AppendOnlyDeleteDescData *AppendOnlyDeleteDesc;
 typedef struct AppendOnlyUniqueCheckDescData
 {
 	AppendOnlyBlockDirectory *blockDirectory;
+	/* visimap to check for deleted tuples as part of INSERT/COPY */
 	AppendOnlyVisimap 		 *visimap;
+	/* visimap support structure to check for deleted tuples as part of UPDATE */
+	AppendOnlyVisimapDelete  *visiMapDelete;
 } AppendOnlyUniqueCheckDescData;
 
 typedef struct AppendOnlyUniqueCheckDescData *AppendOnlyUniqueCheckDesc;
@@ -495,7 +525,6 @@ extern void appendonly_delete_finish(AppendOnlyDeleteDesc aoDeleteDesc);
 extern bool appendonly_positionscan(AppendOnlyScanDesc aoscan,
 									AppendOnlyBlockDirectoryEntry *dirEntry,
 									int fsInfoIdx);
-
 /*
  * Update total bytes read for the entire scan. If the block was compressed,
  * update it with the compressed length. If the block was not compressed, update

@@ -57,6 +57,18 @@ typedef struct
 	bool		has_wts;		/* Does the rel have WorkTableScan? */
 } CdbpathMfjRel;
 
+/*
+ * We introduced execute on initplan option for function at
+ * https://github.com/greenplum-db/gpdb/pull/9542, which introduced
+ * a new location option for function: EXECUTE ON INITPLAN and run
+ * the f() on initplan.
+ *
+ * But if f() itself is in initplan, this execution method will cause
+ * problems. Therefore, the variable allow_append_initplan_for_function_scan
+ * is introduced to control this optimization
+ */
+static bool allow_append_initplan_for_function_scan = true;
+
 static bool try_redistribute(PlannerInfo *root, CdbpathMfjRel *g,
 							 CdbpathMfjRel *o, List *redistribution_clauses);
 
@@ -171,6 +183,37 @@ cdbpath_create_motion_path(PlannerInfo *root,
 	 */
 	if (cdbpathlocus_equal(subpath->locus, locus))
 		return subpath;
+
+	/*
+	 * This can be only happened for create as or dml
+	 * The target locus is CdbLocusType_Replicated or CdbLocusType_Partitioned
+	 * However, the locus of subpath is CdbLocusType_OuterQuery
+	 * Adjust the locus of subpath according to target locus.
+	 */
+	if (CdbPathLocus_IsOuterQuery(subpath->locus)
+				&& !CdbPathLocus_IsOuterQuery(locus))
+	{
+		/*
+		 * If target locus is replicated
+		 * adjust locus of subpath to CdbLocusType_Replicated
+		 * and there is no need to add a motion between them.
+		 */
+		if (CdbPathLocus_IsReplicated(locus))
+		{
+			subpath->locus.locustype = CdbLocusType_Replicated;
+			subpath->locus.numsegments = locus.numsegments;
+		}
+		/*
+		 * If target locus is partitioned
+		 * Adjust locus of subpath to CdbLocusType_SingleQE
+		 * then add a redistribution motion above it.
+		 */
+		else if (CdbPathLocus_IsPartitioned(locus))
+		{
+			subpath->locus.locustype = CdbLocusType_SingleQE;
+			subpath->locus.numsegments = 1;
+		}
+	}
 
 	/* Moving subpath output to a single executor process (qDisp or qExec)? */
 	if (CdbPathLocus_IsOuterQuery(locus))
@@ -2390,6 +2433,28 @@ create_motion_path_for_insert(PlannerInfo *root, GpPolicy *policy,
 				return subpath;
 			}
 
+			/* plan's data can be available on all segment, no motion needed */
+			if(CdbPathLocus_IsOuterQuery(subpath->locus))
+			{
+				/*
+				 * A query to reach here:
+				 * create table dest (tc1 int, tc2 int) distributed replicated;
+				 * insert into dest
+				 *   select
+				 *       a.tc1,ss.tc2
+				 *   from
+				 *       ttt1 a join lateral (
+				 *              select * from ttt2 b where b.tc2 =  a.tc2 limit 1)ss
+				 *   on true ;
+				 * The locus of subpath is outerquery, if locus of target table is replicated.
+				 * wo can modify locus of subpath to CdbLocusType_SegmentGeneral.
+				 * And there is no need to add a motion.
+				 */
+				subpath->locus.numsegments = Min(subpath->locus.numsegments, policy->numsegments) ;
+				subpath->locus.locustype = CdbLocusType_SegmentGeneral;
+				return subpath;
+			}
+
 		}
 		subpath = cdbpath_create_broadcast_motion_path(root, subpath, policy->numsegments);
 	}
@@ -2417,6 +2482,11 @@ create_motion_path_for_upddel(PlannerInfo *root, Index rti, GpPolicy *policy,
 		else
 		{
 			CdbPathLocus_MakeStrewn(&targetLocus, policy->numsegments);
+			if(CdbPathLocus_IsOuterQuery(subpath->locus))
+			{
+				subpath->locus.numsegments = 1;
+				subpath->locus.locustype = CdbLocusType_SingleQE;
+			}
 			subpath = cdbpath_create_explicit_motion_path(root,
 														  subpath,
 														  targetLocus);
@@ -2514,6 +2584,11 @@ create_split_update_path(PlannerInfo *root, Index rti, GpPolicy *policy, Path *s
 		targetLocus = cdbpathlocus_for_insert(root, policy, subpath->pathtarget);
 
 		subpath = (Path *) make_splitupdate_path(root, subpath, rti);
+		if(CdbPathLocus_IsOuterQuery(subpath->locus))
+		{
+			subpath->locus.numsegments = 1;
+			subpath->locus.locustype = CdbLocusType_SingleQE;
+		}
 		subpath = cdbpath_create_explicit_motion_path(root,
 													  subpath,
 													  targetLocus);
@@ -2620,7 +2695,7 @@ make_splitupdate_path(PlannerInfo *root, Path *subpath, Index rti)
 	 * So an update trigger is not allowed when updating the
 	 * distribution key.
 	 */
-	if (has_update_triggers(rte->relid))
+	if (has_update_triggers(rte->relid, false))
 		ereport(ERROR,
 				(errcode(ERRCODE_GP_FEATURE_NOT_YET),
 				 errmsg("UPDATE on distributed key column not allowed on relation with update triggers")));
@@ -2668,4 +2743,22 @@ can_elide_explicit_motion(PlannerInfo *root, Index rti, Path *subpath,
 	}
 
 	return false;
+}
+
+void
+unset_allow_append_initplan_for_function_scan()
+{
+	allow_append_initplan_for_function_scan = false;
+}
+
+void
+set_allow_append_initplan_for_function_scan()
+{
+	allow_append_initplan_for_function_scan = true;
+}
+
+bool
+get_allow_append_initplan_for_function_scan()
+{
+	return allow_append_initplan_for_function_scan;
 }

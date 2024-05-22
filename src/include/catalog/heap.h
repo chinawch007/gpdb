@@ -134,6 +134,7 @@ extern List *AddRelationConstraints(Relation rel,
 						  List *constraints);
 
 extern void RelationClearMissing(Relation rel);
+extern void RelationClearMissingByAttname(Relation rel, char *attname);
 extern void SetAttrMissing(Oid relid, char *attname, char *value);
 
 extern Oid	StoreAttrDefault(Relation rel, AttrNumber attnum,
@@ -184,6 +185,8 @@ extern void StorePartitionKey(Relation rel,
 extern void RemovePartitionKeyByRelId(Oid relid);
 extern void StorePartitionBound(Relation rel, Relation parent,
 								PartitionBoundSpec *bound);
+extern void StorePartitionBoundSkipInvalidation(Relation rel, Relation parent,
+												PartitionBoundSpec *bound);
 
 /* MPP-6929: metadata tracking */
 extern void MetaTrackAddObject(Oid		classid, 

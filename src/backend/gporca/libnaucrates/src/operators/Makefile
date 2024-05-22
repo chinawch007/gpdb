@@ -83,7 +83,6 @@ OBJS        = CDXLColDescr.o \
               CDXLPhysicalSequence.o \
               CDXLPhysicalSort.o \
               CDXLPhysicalSplit.o \
-              CDXLPhysicalSubqueryScan.o \
               CDXLPhysicalTVF.o \
               CDXLPhysicalTableScan.o \
               CDXLPhysicalValuesScan.o \
@@ -131,6 +130,7 @@ OBJS        = CDXLColDescr.o \
               CDXLScalarOneTimeFilter.o \
               CDXLScalarOpExpr.o \
               CDXLScalarOpList.o \
+              CDXLScalarParam.o \
               CDXLScalarProjElem.o \
               CDXLScalarProjList.o \
               CDXLScalarRecheckCondFilter.o \

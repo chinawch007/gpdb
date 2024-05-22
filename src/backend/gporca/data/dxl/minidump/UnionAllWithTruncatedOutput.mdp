@@ -160,7 +160,7 @@
       <dxl:ColumnStatistics Mdid="1.50266.1.1.7" Name="tableoid" Width="4.000000"/>
       <dxl:ColumnStatistics Mdid="1.50266.1.1.6" Name="cmax" Width="4.000000"/>
       <dxl:RelationStatistics Mdid="2.50266.1.1" Name="i" Rows="2.000000"/>
-      <dxl:Relation Mdid="6.50266.1.1" Name="i" IsTemporary="false" StorageType="Heap" DistributionPolicy="Hash" DistributionColumns="0" Keys="8,2">
+      <dxl:Relation Mdid="6.50266.1.1" Name="i" IsTemporary="false" Rows="2.000000" StorageType="Heap" DistributionPolicy="Hash" DistributionColumns="0" Keys="8,2">
         <dxl:Columns>
           <dxl:Column Name="i1" Attno="1" Mdid="0.23.1.0" Nullable="true" ColWidth="4">
           </dxl:Column>
@@ -189,7 +189,7 @@
       <dxl:ColumnStatistics Mdid="1.50266.1.1.5" Name="xmax" Width="4.000000"/>
       <dxl:ColumnStatistics Mdid="1.50266.1.1.4" Name="cmin" Width="4.000000"/>
       <dxl:RelationStatistics Mdid="2.50289.1.1" Name="j" Rows="2.000000"/>
-      <dxl:Relation Mdid="6.50289.1.1" Name="j" IsTemporary="false" StorageType="Heap" DistributionPolicy="Hash" DistributionColumns="0" Keys="8,2">
+      <dxl:Relation Mdid="6.50289.1.1" Name="j" IsTemporary="false" Rows="2.000000" StorageType="Heap" DistributionPolicy="Hash" DistributionColumns="0" Keys="8,2">
         <dxl:Columns>
           <dxl:Column Name="j1" Attno="1" Mdid="0.23.1.0" Nullable="true" ColWidth="4">
           </dxl:Column>
@@ -304,7 +304,7 @@
     <dxl:Plan Id="0" SpaceSize="48">
       <dxl:GatherMotion InputSegments="0,1" OutputSegments="-1">
         <dxl:Properties>
-          <dxl:Cost StartupCost="0" TotalCost="2155.001254" Rows="3.333333" Width="8"/>
+          <dxl:Cost StartupCost="0" TotalCost="2155.001214" Rows="3.333333" Width="8"/>
         </dxl:Properties>
         <dxl:ProjList>
           <dxl:ProjElem ColId="1" Alias="i1">
@@ -318,7 +318,7 @@
         <dxl:SortingColumnList/>
         <dxl:Append IsTarget="false" IsZapped="false">
           <dxl:Properties>
-            <dxl:Cost StartupCost="0" TotalCost="2155.001135" Rows="3.333333" Width="8"/>
+            <dxl:Cost StartupCost="0" TotalCost="2155.001095" Rows="3.333333" Width="8"/>
           </dxl:Properties>
           <dxl:ProjList>
             <dxl:ProjElem ColId="1" Alias="i2">
@@ -331,7 +331,7 @@
           <dxl:Filter/>
           <dxl:NestedLoopJoin JoinType="Inner" IndexNestedLoopJoin="false" OuterRefAsParam="false">
             <dxl:Properties>
-              <dxl:Cost StartupCost="0" TotalCost="1293.000632" Rows="1.333333" Width="8"/>
+              <dxl:Cost StartupCost="0" TotalCost="1293.000620" Rows="1.333333" Width="8"/>
             </dxl:Properties>
             <dxl:ProjList>
               <dxl:ProjElem ColId="1" Alias="i2">
@@ -425,7 +425,7 @@
           </dxl:NestedLoopJoin>
           <dxl:HashJoin JoinType="Inner">
             <dxl:Properties>
-              <dxl:Cost StartupCost="0" TotalCost="862.000490" Rows="2.000000" Width="8"/>
+              <dxl:Cost StartupCost="0" TotalCost="862.000462" Rows="2.000000" Width="8"/>
             </dxl:Properties>
             <dxl:ProjList>
               <dxl:ProjElem ColId="19" Alias="i2">

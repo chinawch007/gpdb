@@ -24,6 +24,7 @@
 #include "libpq/libpq-be.h"
 #include "libpq/pqformat.h"
 #include "miscadmin.h"
+#include "replication/syncrep.h"
 #include "storage/lmgr.h"
 #include "storage/pmsignal.h"
 #include "storage/s_lock.h"
@@ -120,7 +121,7 @@ int gp_gxid_prefetch_num;
  * FUNCTIONS PROTOTYPES
  */
 static void doPrepareTransaction(void);
-static void doInsertForgetCommitted(void);
+static XLogRecPtr doInsertForgetCommitted(void);
 static void doNotifyingOnePhaseCommit(void);
 static void doNotifyingCommitPrepared(void);
 static void doNotifyingAbort(void);
@@ -262,6 +263,21 @@ static void
 currentDtxActivate(void)
 {
 	bool signal_dtx_recovery;
+
+	/*
+	 * A hot standby transaction does not have a valid gxid, so can skip 
+	 * most of the things in this function. We still explicitly set some 
+	 * fields that are irrelevant to hot standby for cleanness.
+	 */
+	if (IS_HOT_STANDBY_QD())
+	{
+		/* standby QD will stay in this state until transaction completed */
+		setCurrentDtxState(DTX_STATE_ACTIVE_DISTRIBUTED);
+		MyTmGxact->sessionId = gp_session_id;
+		MyTmGxact->gxid = InvalidDistributedTransactionId;
+		MyTmGxact->includeInCkpt = false;
+		return;
+	}
 
 	if (ShmemVariableCache->GxidCount <= GXID_PRETCH_THRESHOLD &&
 		(GetDtxRecoveryEvent() & DTX_RECOVERY_EVENT_BUMP_GXID) == 0)
@@ -497,17 +513,21 @@ doPrepareTransaction(void)
 /*
  * Insert FORGET COMMITTED into the xlog.
  */
-static void
+static XLogRecPtr
 doInsertForgetCommitted(void)
 {
+	XLogRecPtr recptr;
+
 	elog(DTM_DEBUG5, "doInsertForgetCommitted entering in state = %s", DtxStateToString(MyTmGxactLocal->state));
 
 	setCurrentDtxState(DTX_STATE_INSERTING_FORGET_COMMITTED);
 
-	RecordDistributedForgetCommitted(getDistributedTransactionId());
+	recptr = RecordDistributedForgetCommitted(getDistributedTransactionId());
 
 	setCurrentDtxState(DTX_STATE_INSERTED_FORGET_COMMITTED);
 	MyTmGxact->includeInCkpt = false;
+
+	return recptr;
 }
 
 static void
@@ -543,6 +563,7 @@ doNotifyingCommitPrepared(void)
 	MemoryContext oldcontext = CurrentMemoryContext;;
 	time_t		retry_time_start;
 	bool		retry_timedout;
+	XLogRecPtr 	recptr;
 
 	elog(DTM_DEBUG5, "doNotifyingCommitPrepared entering in state = %s", DtxStateToString(MyTmGxactLocal->state));
 
@@ -647,7 +668,7 @@ doNotifyingCommitPrepared(void)
 
 	SIMPLE_FAULT_INJECTOR("dtm_before_insert_forget_comitted");
 
-	doInsertForgetCommitted();
+	recptr = doInsertForgetCommitted();
 
 	/*
 	 * We release the TwophaseCommitLock only after writing our distributed
@@ -655,6 +676,10 @@ doNotifyingCommitPrepared(void)
 	 * their commit prepared records.
 	 */
 	LWLockRelease(TwophaseCommitLock);
+
+	/* wait for sync'ing the FORGET commit to hot standby, if remote_apply or higher is requested. */
+	if (synchronous_commit >= SYNCHRONOUS_COMMIT_REMOTE_APPLY)
+		SyncRepWaitForLSN(recptr, true);
 }
 
 static void
@@ -1265,18 +1290,23 @@ doDispatchDtxProtocolCommand(DtxProtocolCommand dtxProtocolCommand,
 
 	if (qeError)
 	{
-		if (!raiseError)
+		/*
+		 * Report the ERROR under Debug_print_full_dtm, as it can be lost as we
+		 * flush below and the caller may forget to CopyErrorData(). Also, in
+		 * some cases caller may not be able to act on the copy (e.g. due to
+		 * another error).
+		 */
+		ereportif(Debug_print_full_dtm, LOG,
+				  (errmsg("error on dispatch of dtx protocol command '%s' for gid '%s'",
+						  dtxProtocolCommandStr, gid),
+				   errdetail("QE reported error: %s", qeError->message)));
+
+		if (raiseError)
 		{
-			ereport(LOG,
-					(errmsg("DTM error (gathered results from cmd '%s')", dtxProtocolCommandStr),
-					 errdetail("QE reported error: %s", qeError->message)));
-		}
-		else
-		{
+			/* flush then rethrow, to avoid overflowing the error stack */
 			FlushErrorState();
 			ThrowErrorData(qeError);
 		}
-		return false;
 	}
 
 	if (results == NULL)
@@ -1449,6 +1479,7 @@ resetTmGxact(void)
 	MyTmGxactLocal->explicitBeginRemembered = false;
 	MyTmGxactLocal->writerGangLost = false;
 	MyTmGxactLocal->dtxSegmentsMap = NULL;
+	MyTmGxactLocal->dtxLoggedSegMap = NULL;
 	MyTmGxactLocal->dtxSegments = NIL;
 	MyTmGxactLocal->isOnePhaseCommit = false;
 	if (MyTmGxactLocal->waitGxids != NULL)
@@ -1612,7 +1643,7 @@ isDtxQueryDispatcher(void)
 	isSharedLocalSnapshotSlotPresent = (SharedLocalSnapshotSlot != NULL);
 
 	return (Gp_role == GP_ROLE_DISPATCH &&
-			isDtmStarted &&
+			(isDtmStarted || EnableHotStandby) &&
 			isSharedLocalSnapshotSlotPresent);
 }
 
@@ -2014,11 +2045,13 @@ sendDtxExplicitBegin(void)
 }
 
 /**
- * On the QD, run the Prepare operation.
+ * On the QE, run the Prepare operation.
  */
 static void
 performDtxProtocolPrepare(const char *gid)
 {
+	SIMPLE_FAULT_INJECTOR("qe_start_prepared");
+
 	StartTransactionCommand();
 
 	elog(DTM_DEBUG5, "performDtxProtocolCommand going to call PrepareTransactionBlock for distributed transaction (id = '%s')", gid);
@@ -2098,6 +2131,7 @@ performDtxProtocolCommitOnePhase(const char *gid)
 static void
 performDtxProtocolCommitPrepared(const char *gid, bool raiseErrorIfNotFound)
 {
+	SIMPLE_FAULT_INJECTOR("qe_start_commit_prepared");
 	Assert(Gp_role == GP_ROLE_EXECUTE);
 
 	elog(DTM_DEBUG5,
@@ -2130,6 +2164,7 @@ performDtxProtocolCommitPrepared(const char *gid, bool raiseErrorIfNotFound)
 	sendWaitGxidsToQD(waitGxids);
 
 	finishDistributedTransactionContext("performDtxProtocolCommitPrepared -- Commit Prepared", false);
+	SIMPLE_FAULT_INJECTOR("finish_commit_prepared");
 }
 
 /**

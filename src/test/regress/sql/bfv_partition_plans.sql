@@ -15,6 +15,8 @@
 -- s/segment \d+/segment ###/
 -- m/using \d+ of \d+ buckets/
 -- s/using \d+ of \d+ buckets/using ## of ### buckets/
+-- m/\(cost=.*\)/
+-- s/\(cost=.*\)//
 -- end_matchsubs
 
 create schema bfv_partition_plans;
@@ -107,6 +109,7 @@ drop table mpp7980;
 -- SETUP
 -- start_ignore
 set optimizer_enable_bitmapscan=on;
+set optimizer_enable_dynamicbitmapscan=on;
 set optimizer_enable_indexjoin=on;
 drop table if exists mpp23195_t1;
 drop table if exists mpp23195_t2;
@@ -132,6 +135,7 @@ select * from mpp23195_t1,mpp23195_t2 where mpp23195_t1.i < mpp23195_t2.i;
 drop table if exists mpp23195_t1;
 drop table if exists mpp23195_t2;
 set optimizer_enable_bitmapscan=off;
+set optimizer_enable_dynamicbitmapscan=off;
 set optimizer_enable_indexjoin=off;
 -- end_ignore
 

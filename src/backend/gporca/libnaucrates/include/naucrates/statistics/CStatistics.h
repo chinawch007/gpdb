@@ -184,6 +184,12 @@ public:
 	// actual number of rows
 	CDouble Rows() const override;
 
+	void
+	SetRows(CDouble rows) override
+	{
+		m_rows = rows;
+	}
+
 	ULONG
 	RelPages() const override
 	{
@@ -231,6 +237,9 @@ public:
 
 	// look up the number of distinct values of a particular column
 	CDouble GetNDVs(const CColRef *colref) override;
+
+	// look up the fraction of nulls for a particular column
+	CDouble GetNullFreq(const CColRef *colref) override;
 
 	// look up the width of a particular column
 	virtual const CDouble *GetWidth(ULONG colid) const;

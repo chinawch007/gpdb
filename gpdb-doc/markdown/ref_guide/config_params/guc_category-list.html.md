@@ -32,6 +32,7 @@ These parameters control how clients connect and authenticate to Greenplum Datab
 - [gp_dispatch_keepalives_count](guc-list.html#gp_dispatch_keepalives_count)
 - [gp_dispatch_keepalives_idle](guc-list.html#gp_dispatch_keepalives_idle)
 - [gp_dispatch_keepalives_interval](guc-list.html#gp_dispatch_keepalives_interval)
+- [gp_postmaster_address_family](guc-list.html#gp_postmaster_address_family)
 - [gp_vmem_idle_resource_timeout](guc-list.html#gp_vmem_idle_resource_timeout)
 - [listen_addresses](guc-list.html#listen_addresses)
 - [max_connections](guc-list.html#max_connections)
@@ -121,8 +122,10 @@ These parameters control the usage of GPORCA by Greenplum Database. For informat
 - [optimizer_enable_indexonlyscan](guc-list.html#optimizer_enable_indexonlyscan)
 - [optimizer_enable_coordinator_only_queries](guc-list.html#optimizer_enable_coordinator_only_queries)
 - [optimizer_enable_multiple_distinct_aggs](guc-list.html#optimizer_enable_multiple_distinct_aggs)
+- [optimizer_enable_orderedagg](guc-list.html#optimizer_enable_orderedagg)
 - [optimizer_enable_push_join_below_union_all](guc-list.html#optimizer_enable_push_join_below_union_all)
 - [optimizer_enable_replicated_table](guc-list.html#optimizer_enable_replicated_table)
+- [optimizer_enable_right_outer_join](guc-list.html#optimizer_enable_right_outer_join)
 - [optimizer_force_agg_skew_avoidance](guc-list.html#optimizer_force_agg_skew_avoidance)
 - [optimizer_force_comprehensive_join_implementation](guc-list.html#optimizer_force_comprehensive_join_implementation)
 - [optimizer_force_multistage_agg](guc-list.html#optimizer_force_multistage_agg)
@@ -228,6 +231,7 @@ These parameters adjust the amount of data sampled by an `ANALYZE` operation. Ad
 Control the query plan execution.
 
 - [gp_max_slices](guc-list.html#gp_max_slices)
+- [gp_max_system_slices](guc-list.html#gp_max_system_slices)
 - [plan_cache_mode](guc-list.html#plan_cache_mode)
 
 ### <a id="topic_jit"></a>JIT Configuration Parameters
@@ -276,8 +280,10 @@ These configuration parameters control Greenplum Database logging.
 - [debug_print_prelim_plan](guc-list.html#debug_print_prelim_plan)
 - [debug_print_rewritten](guc-list.html#debug_print_rewritten)
 - [debug_print_slice_table](guc-list.html#debug_print_slice_table)
+- [debug_shareinput_xslice](guc-list.html#debug_shareinput_xslice)
 - [log_autostats](guc-list.html#log_autostats)
 - [log_connections](guc-list.html#log_connections)
+- [log_directory](guc-list.html#log_directory)
 - [log_disconnections](guc-list.html#log_disconnections)
 - [log_dispatch_stats](guc-list.html#log_dispatch_stats)
 - [log_duration](guc-list.html#log_duration)
@@ -334,6 +340,7 @@ These parameters control the server statistics collection feature. When statisti
 When automatic statistics collection is enabled, you can run `ANALYZE` automatically in the same transaction as an `INSERT`, `UPDATE`, `DELETE`, `COPY` or `CREATE TABLE...AS SELECT` statement when a certain threshold of rows is affected \(`on_change`\), or when a newly generated table has no statistics \(`on_no_stats`\). To enable this feature, set the following server configuration parameters in your Greenplum Database coordinator `postgresql.conf` file and restart Greenplum Database:
 
 - [gp_autostats_allow_nonowner](guc-list.html#gp_autostats_allow_nonowner)
+- [gp_autostats_lock_wait](guc-list.html#gp_autostats_lock_wait)
 - [gp_autostats_mode](guc-list.html#gp_autostats_mode)
 - [gp_autostats_mode_in_functions](guc-list.html#gp_autostats_mode_in_functions)
 - [gp_autostats_on_change_threshold](guc-list.html#gp_autostats_on_change_threshold)
@@ -417,6 +424,7 @@ The following parameters configure the Greenplum Database resource group workloa
 - [gp_resource_group_bypass](guc-list.html#gp_resource_group_bypass)
 - [gp_resource_group_bypass_catalog_query](guc-list.html#gp_resource_group_bypass_catalog_query)
 - [gp_resource_group_bypass_direct_dispatch](guc-list.html#gp_resource_group_bypass_direct_dispatch)
+- [gp_resource_group_cgroup_parent](guc-list.html#gp_resource_group_cgroup_parent)
 - [gp_resource_group_cpu_limit](guc-list.html#gp_resource_group_cpu_limit)
 - [gp_resource_group_cpu_priority](guc-list.html#gp_resource_group_cpu_priority)
 - [gp_resource_group_move_timeout](guc-list.html#gp_resource_group_move_timeout)

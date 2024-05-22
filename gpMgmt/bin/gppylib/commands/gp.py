@@ -180,6 +180,10 @@ class CmdArgs(list):
             self.append("-D '%s'" % (cfg_array))
         return self
 
+    def set_mirror_fast_wait(self, mirrorFastWait):
+        if mirrorFastWait:
+            self.append("--gp-mirror-fast-wait")
+        return self
 
 
 class PgCtlBackendOptions(CmdArgs):
@@ -267,7 +271,7 @@ class PgCtlStartArgs(CmdArgs):
      '-o', '"', '-p', '5432', '--silent-mode=true', '"', 'start']
     """
 
-    def __init__(self, datadir, backend, era, wrapper, args, wait, timeout=None):
+    def __init__(self, datadir, backend, era, wrapper, args, wait, timeout=None, mirrorFastWait=False):
         """
         @param datadir: database data directory
         @param backend: backend options string from PgCtlBackendOptions
@@ -288,6 +292,7 @@ class PgCtlStartArgs(CmdArgs):
         ])
         self.set_wrapper(wrapper, args)
         self.set_wait_timeout(wait, timeout)
+        self.set_mirror_fast_wait(mirrorFastWait)
         self.extend([
             "-o", "\"", str(backend), "\"",
             "start"
@@ -381,7 +386,8 @@ class SegmentStart(Command):
     def __init__(self, name, gpdb, numContentsInCluster, era, mirrormode,
                  utilityMode=False, ctxt=LOCAL, remoteHost=None,
                  pg_ctl_wait=True, timeout=SEGMENT_TIMEOUT_DEFAULT,
-                 specialMode=None, wrapper=None, wrapper_args=None):
+                 specialMode=None, wrapper=None, wrapper_args=None,
+                 mirrorFastWait=False):
 
         # This is referenced from calling code
         self.segment = gpdb
@@ -399,7 +405,7 @@ class SegmentStart(Command):
         b.set_special(specialMode)
 
         # build pg_ctl command
-        c = PgCtlStartArgs(datadir, b, era, wrapper, wrapper_args, pg_ctl_wait, timeout)
+        c = PgCtlStartArgs(datadir, b, era, wrapper, wrapper_args, pg_ctl_wait, timeout, mirrorFastWait)
         logger.info("SegmentStart pg_ctl cmd is %s", c)
         self.cmdStr = str(c) + ' 2>&1'
 
@@ -1013,12 +1019,12 @@ class GpSegRecovery(Command):
     """
     Format gpsegrecovery call for running pg_basebackup/pg_rewind on remoteHost for the segments passed in confinfo
     """
-    def __init__(self, name, confinfo, logdir, batchSize, verbose, remoteHost, forceoverwrite, era):
-        cmdStr = _get_cmd_for_recovery_wrapper('gpsegrecovery', confinfo, logdir, batchSize, verbose, forceoverwrite, era)
+    def __init__(self, name, confinfo, logdir, batchSize, verbose, remoteHost, forceoverwrite, era, maxRate):
+        cmdStr = _get_cmd_for_recovery_wrapper('gpsegrecovery', confinfo, logdir, batchSize, verbose, forceoverwrite, era, maxRate)
         Command.__init__(self, name, cmdStr, REMOTE, remoteHost, start_new_session=True)
 
 
-def _get_cmd_for_recovery_wrapper(wrapper_filename, confinfo, logdir, batchSize, verbose, forceoverwrite, era=None):
+def _get_cmd_for_recovery_wrapper(wrapper_filename, confinfo, logdir, batchSize, verbose, forceoverwrite, era=None, maxRate=None):
     cmdStr = '$GPHOME/sbin/{}.py -c {} -l {}'.format(wrapper_filename, pipes.quote(confinfo), pipes.quote(logdir))
 
     if verbose:
@@ -1029,6 +1035,9 @@ def _get_cmd_for_recovery_wrapper(wrapper_filename, confinfo, logdir, batchSize,
         cmdStr += " --force-overwrite"
     if era:
         cmdStr += " --era={}".format(era)
+    if maxRate:
+        cmdStr += " --max-rate {}".format(maxRate)
+
 
     return cmdStr
 
@@ -1685,11 +1694,13 @@ class IfAddrs:
         cmd = ["echo 'START_CMD_OUTPUT'; %s/libexec/ifaddrs" % GPHOME]
         if not include_loopback:
             cmd.append('--no-loopback')
-        if hostname:
+        localhost = socket.gethostname()
+        if hostname and hostname != localhost:
             args = ['ssh', '-n', hostname]
             args.append(' '.join(cmd))
         else:
-            args = cmd
+            args = ['bash', '-c']
+            args.append(' '.join(cmd))
 
         result = subprocess.check_output(args).decode()
         return result.split('START_CMD_OUTPUT\n')[1].splitlines()

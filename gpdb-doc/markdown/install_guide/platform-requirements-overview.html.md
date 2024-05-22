@@ -46,7 +46,8 @@ Greenplum Database 7 requires the following software packages on RHEL systems. T
 -   python3-psycopg2
 -   python3-psutil
 -   python3-pyyaml
--   python39
+-   python3.11
+-   python3.11-devel
 -   readline
 -   rsync
 -   sed
@@ -81,14 +82,14 @@ Greenplum Databased 7 supports these Java versions for PL/Java and PXF:
 -   Open JDK 8 or Open JDK 11, available from [AdoptOpenJDK](https://adoptopenjdk.net)
 -   Oracle JDK 8 or Oracle JDK 11
 
-#### <a id="topic_xbl_mkx_python"></a>Python
+### <a id="topic_xbl_mkx_python"></a>Python
 
-Greenplum Database uses the system default `python3` for the Greenplum management utilities, and `python3.9` for the [PL/Python module](../analytics/pl_python.html). For most of the supported OS versions, the system default `python3` is `python3.9`. If you are installing Greenplum Database on Rocky Linux 8, the default `python3` version included is `python3.6`. You may want to unify the `python3` versions to `python3.9` by running the following commands:
+Greenplum Database uses the system default `python3` for the Greenplum management utilities, and `python3.11` for the [PL/Python module](../analytics/pl_python.html). For most of the supported OS versions, the system default `python3` is `python3.9`. If you are installing Greenplum Database on Rocky Linux 8, the default `python3` version included is `python3.6`. You may want to unify the `python3` versions to `python3.11` by running the following commands:
 
 ```
-sudo yum install python39-psycopg2 python39-pyyaml python39-psutil
-sudo update-alternatives set python3 /usr/bin/python39
-sudo update-alternatives set python /usr/bin/python39
+sudo yum install python3.11 python3.11-devel python3.11-psycopg2 python3.11-pyyaml python3.11-psutil
+sudo update-alternatives set python3 /usr/bin/python3.11
+sudo update-alternatives set python /usr/bin/python3.11
 ```
 
 ## <a id="topic31"></a>VMware Greenplum Tools and Extensions Compatibility
@@ -126,7 +127,7 @@ This table lists the versions of the Greenplum Extensions that are compatible wi
 <td class="entry cell-norowborder" style="vertical-align:top;" headers="d78288e689 ">Supports Java 8 and 11.</td>
 </tr>
 <tr class="row">
-<td class="entry nocellnorowborder" style="vertical-align:top;" headers="d78288e683 "><a class="xref" href="../install_guide/install_python_dsmod.html">Python 3.9 Data Science Module Package</a></td>
+<td class="entry nocellnorowborder" style="vertical-align:top;" headers="d78288e683 "><a class="xref" href="../install_guide/install_python_dsmod.html">Python 3.11 Data Science Module Package</a></td>
 <td class="entry nocellnorowborder" style="vertical-align:top;" headers="d78288e686 ">1.2</td>
 <td class="entry cell-norowborder" style="vertical-align:top;" headers="d78288e689 "> </td>
 </tr>
@@ -184,16 +185,15 @@ These Greenplum Database extensions are installed with Greenplum Database
 -   Greenplum Platform Extension Framework \(PXF\) - PXF provides access to Hadoop, object store, and SQL external data stores. Refer to [Accessing External Data with PXF](../admin_guide/external/pxf-overview.html) in the *Greenplum Database Administrator Guide* for PXF configuration and usage information.
 
     > **Note** VMware Greenplum Database versions starting with 6.19.0 no longer bundle a version of PXF. You can install PXF in your Greenplum cluster by installing [the independent distribution of PXF](https://docs.vmware.com/en/VMware-Greenplum-Platform-Extension-Framework/index.html) as described in the PXF documentation.
--   Greenplum Streaming Server v1.5.3 - The VMware Greenplum Streaming Server is an ETL tool that provides high speed, parallel data transfer from Informatica, Kafka, Apache NiFi and custom client data sources to a VMware Greenplum cluster. Refer to the [VMware Greenplum Streaming Server](https://docs.vmware.com/en/VMware-Greenplum-Streaming-Server/index.html) Documentation for more information about this feature.
+-   Greenplum Streaming Server v1.5.3 - The VMware Greenplum Streaming Server is an ETL tool that provides high speed, parallel data transfer from Kafka, Apache NiFi and custom client data sources to a VMware Greenplum cluster. Refer to the [VMware Greenplum Streaming Server](https://docs.vmware.com/en/VMware-Greenplum-Streaming-Server/index.html) Documentation for more information about this feature.
 -   Greenplum Streaming Server Kafka integration - The Kafka integration provides high speed, parallel data transfer from a Kafka cluster to a Greenplum Database cluster for batch and streaming ETL operations. It requires Kafka version 0.11 or newer for exactly-once delivery assurance. Refer to the [VMware Greenplum Streaming Server](https://docs.vmware.com/en/VMware-Greenplum-Streaming-Server/index.html) Documentation for more information about this feature.
 -   Greenplum Connector for Apache Spark v1.6.2 - The VMware Greenplum Connector for Apache Spark supports high speed, parallel data transfer between Greenplum and an Apache Spark cluster using Spark’s Scala API.
 -   Greenplum Connector for Apache NiFi v1.0.0 - The VMware Greenplum Connector for Apache NiFi enables you to set up a NiFi dataflow to load record-oriented data from any source into Greenplum Database.
--   Greenplum Informatica Connector v1.0.5 - The VMware Greenplum Connector for Informatica supports high speed data transfer from an Informatica PowerCenter cluster to a VMware Greenplum cluster for batch and streaming ETL operations.
 - Progress DataDirect JDBC Drivers v6.0.0+109 - The Progress DataDirect JDBC drivers are compliant with the Type 4 architecture, but provide advanced features that define them as Type 5 drivers.
 - Progress DataDirect ODBC Drivers 7.1.6+7.16.1058 - The Progress DataDirect ODBC drivers enable third party applications to connect via a common interface to the VMware Greenplum system.
 -   R2B X-LOG v5.x and v6.x - Real-time data replication solution that achieves high-speed database replication through the use of Redo Log Capturing method.
 
-> **Note** Greenplum 5.x clients (gpload, gpfdist) are supported with Greenplum 6.x and 7x Server and Informatica PowerCenter and PowerExchange 10.4.
+> **Note** Greenplum 5.x clients (gpload, gpfdist) are supported with Greenplum 6.x and 7x Server.
 
 ## <a id="topic_tnl_3mx_zgb"></a>Hardware Requirements
 
@@ -251,20 +251,6 @@ Other features of the shared storage such as de-duplication and/or replication a
 Greenplum Database can be deployed to virtualized systems only if the storage is presented as block devices and the XFS file system is mounted for the storage of the segment directories.
 
 Greenplum Database is supported on Amazon Web Services \(AWS\) servers using either Amazon instance store \(Amazon uses the volume names `ephemeral[0-23]`\) or Amazon Elastic Block Store \(Amazon EBS\) storage. If using Amazon EBS storage the storage should be RAID of Amazon EBS volumes and mounted with the XFS file system for it to be a supported configuration.
-
-<!--- VERIFY 7X interoperablity with DDBOOST
-
-### <a id="fixme"></a>Data Domain Boost \(VMware Greenplum\) 
-
-VMware Greenplum 7 supports Data Domain Boost for backup on Red Hat Enterprise Linux. This table lists the versions of Data Domain Boost SDK and DDOS supported by VMware Greenplum 7.
-
-|VMware Greenplum|Data Domain Boost|DDOS|
-|---------------|-----------------|----|
-|6.x|3.3|6.1 \(all versions\), 6.0 \(all versions\)|
-
-> **Note** In addition to the DDOS versions listed in the previous table, VMware Greenplum supports all minor patch releases \(fourth digit releases\) later than the certified version.
-
--->
 
 ## <a id="topic36"></a>Hadoop Distributions 
 

@@ -80,7 +80,6 @@ extern "C" {
 #include "naucrates/dxl/operators/CDXLPhysicalRoutedDistributeMotion.h"
 #include "naucrates/dxl/operators/CDXLPhysicalSort.h"
 #include "naucrates/dxl/operators/CDXLPhysicalSplit.h"
-#include "naucrates/dxl/operators/CDXLPhysicalSubqueryScan.h"
 #include "naucrates/dxl/operators/CDXLPhysicalTVF.h"
 #include "naucrates/dxl/operators/CDXLPhysicalTableScan.h"
 #include "naucrates/dxl/operators/CDXLPhysicalValuesScan.h"
@@ -104,6 +103,8 @@ extern "C" {
 #include "naucrates/md/IMDTypeBool.h"
 #include "naucrates/md/IMDTypeInt4.h"
 #include "naucrates/traceflags/traceflags.h"
+
+#include "nodes/nodeFuncs.h"
 
 using namespace gpdxl;
 using namespace gpos;
@@ -419,12 +420,6 @@ CTranslatorDXLToPlStmt::TranslateDXLOperatorToPlan(
 									ctxt_translation_prev_siblings);
 			break;
 		}
-		case EdxlopPhysicalSubqueryScan:
-		{
-			plan = TranslateDXLSubQueryScan(dxlnode, output_context,
-											ctxt_translation_prev_siblings);
-			break;
-		}
 		case EdxlopPhysicalResult:
 		{
 			plan = TranslateDXLResult(dxlnode, output_context,
@@ -633,9 +628,9 @@ CTranslatorDXLToPlStmt::TranslateDXLTblScan(
 
 	// Lock any table we are to scan, since it may not have been properly locked
 	// by the parser (e.g in case of generated scans for partitioned tables)
-	CMDIdGPDB *mdid = CMDIdGPDB::CastMdid(md_rel->MDId());
+	OID oidRel = CMDIdGPDB::CastMdid(md_rel->MDId())->Oid();
 	GPOS_ASSERT(dxl_table_descr->LockMode() != -1);
-	gpdb::GPDBLockRelationOid(mdid->Oid(), dxl_table_descr->LockMode());
+	gpdb::GPDBLockRelationOid(oidRel, dxl_table_descr->LockMode());
 
 	Index index = ProcessDXLTblDescr(dxl_table_descr, &base_table_context);
 
@@ -647,24 +642,27 @@ CTranslatorDXLToPlStmt::TranslateDXLTblScan(
 	CDXLNode *filter_dxlnode = (*tbl_scan_dxlnode)[EdxltsIndexFilter];
 
 	List *targetlist = NIL;
-	List *qual = NIL;
+
+	// List to hold the quals after translating filter_dxlnode node.
+	List *query_quals = NIL;
 
 	TranslateProjListAndFilter(
 		project_list_dxlnode, filter_dxlnode,
 		&base_table_context,  // translate context for the base table
 		nullptr,			  // translate_ctxt_left and pdxltrctxRight,
-		&targetlist, &qual, output_context);
+		&targetlist, &query_quals, output_context);
 
 	Plan *plan = nullptr;
 	Plan *plan_return = nullptr;
 
 	if (IMDRelation::ErelstorageForeign == md_rel->RetrieveRelStorageType())
 	{
-		OID oidRel = CMDIdGPDB::CastMdid(md_rel->MDId())->Oid();
 		RangeTblEntry *rte = m_dxl_to_plstmt_context->GetRTEByIndex(index);
 
+		// The postgres_fdw wrapper does not support row level security. So
+		// passing only the query_quals while creating the foreign scan node.
 		ForeignScan *foreign_scan =
-			gpdb::CreateForeignScan(oidRel, index, qual, targetlist,
+			gpdb::CreateForeignScan(oidRel, index, query_quals, targetlist,
 									m_dxl_to_plstmt_context->m_orig_query, rte);
 		foreign_scan->scan.scanrelid = index;
 		plan = &(foreign_scan->scan.plan);
@@ -678,7 +676,22 @@ CTranslatorDXLToPlStmt::TranslateDXLTblScan(
 		plan_return = (Plan *) seq_scan;
 
 		plan->targetlist = targetlist;
-		plan->qual = qual;
+
+		// List to hold the quals which contain both security quals and query
+		// quals.
+		List *security_query_quals = NIL;
+
+		// Fetching the RTE of the relation from the rewritten parse tree
+		// based on the oidRel and adding the security quals of the RTE in
+		// the security_query_quals list.
+		AddSecurityQuals(oidRel, &security_query_quals, &index);
+
+		// The security quals should always be executed first when
+		// compared to other quals. So appending query quals to the
+		// security_query_quals list after the security quals.
+		security_query_quals =
+			gpdb::ListConcat(security_query_quals, query_quals);
+		plan->qual = security_query_quals;
 	}
 
 
@@ -881,8 +894,6 @@ CTranslatorDXLToPlStmt::TranslateDXLIndexScan(
 	// translate index condition list
 	List *index_cond = NIL;
 	List *index_orig_cond = NIL;
-	List *index_strategy_list = NIL;
-	List *index_subtype_list = NIL;
 
 	// Translate Index Conditions if Index isn't used for order by.
 	if (!IsIndexForOrderBy(&base_table_context, ctxt_translation_prev_siblings,
@@ -894,8 +905,7 @@ CTranslatorDXLToPlStmt::TranslateDXLIndexScan(
 			physical_idx_scan_dxlop->GetDXLTableDescr(),
 			false,	// is_bitmap_index_probe
 			md_index, md_rel, output_context, &base_table_context,
-			ctxt_translation_prev_siblings, &index_cond, &index_orig_cond,
-			&index_strategy_list, &index_subtype_list);
+			ctxt_translation_prev_siblings, &index_cond, &index_orig_cond);
 	}
 
 	index_scan->indexqual = index_cond;
@@ -1035,8 +1045,6 @@ CTranslatorDXLToPlStmt::TranslateDXLIndexOnlyScan(
 	// translate index condition list
 	List *index_cond = NIL;
 	List *index_orig_cond = NIL;
-	List *index_strategy_list = NIL;
-	List *index_subtype_list = NIL;
 
 	// Translate Index Conditions if Index isn't used for order by.
 	if (!IsIndexForOrderBy(&base_table_context, ctxt_translation_prev_siblings,
@@ -1048,8 +1056,7 @@ CTranslatorDXLToPlStmt::TranslateDXLIndexOnlyScan(
 			physical_idx_scan_dxlop->GetDXLTableDescr(),
 			false,	// is_bitmap_index_probe
 			md_index, md_rel, output_context, &base_table_context,
-			ctxt_translation_prev_siblings, &index_cond, &index_orig_cond,
-			&index_strategy_list, &index_subtype_list);
+			ctxt_translation_prev_siblings, &index_cond, &index_orig_cond);
 	}
 
 	index_scan->indexqual = index_cond;
@@ -1108,8 +1115,7 @@ CTranslatorDXLToPlStmt::TranslateIndexConditions(
 	const IMDRelation *md_rel, CDXLTranslateContext *output_context,
 	CDXLTranslateContextBaseTable *base_table_context,
 	CDXLTranslationContextArray *ctxt_translation_prev_siblings,
-	List **index_cond, List **index_orig_cond, List **index_strategy_list,
-	List **index_subtype_list)
+	List **index_cond, List **index_orig_cond)
 {
 	// array of index qual info
 	CIndexQualInfoArray *index_qual_info_array =
@@ -1196,12 +1202,10 @@ CTranslatorDXLToPlStmt::TranslateIndexConditions(
 
 		Node *left_arg;
 		Node *right_arg;
-		bool is_null_test_type = false;
 		if (IsA(index_cond_expr, NullTest))
 		{
 			// NullTest only has one arg
 			left_arg = (Node *) (((NullTest *) index_cond_expr)->arg);
-			is_null_test_type = true;
 			right_arg = nullptr;
 		}
 		else
@@ -1263,33 +1267,10 @@ CTranslatorDXLToPlStmt::TranslateIndexConditions(
 			attno = ((Var *) right_arg)->varattno;
 		}
 
-		// NullTest indexqual doesn't need strategy or subtype
-		if (is_null_test_type)
-		{
-			index_qual_info_array->Append(GPOS_NEW(m_mp) CIndexQualInfo(
-				attno, index_cond_expr, original_index_cond_expr,
-				InvalidStrategy, InvalidOid));
-		}
-		else
-		{
-			// retrieve index strategy and subtype
-			StrategyNumber strategy_num;
-			OID index_subtype_oid = InvalidOid;
+		// create index qual
+		index_qual_info_array->Append(GPOS_NEW(m_mp) CIndexQualInfo(
+			attno, index_cond_expr, original_index_cond_expr));
 
-			OID cmp_operator_oid =
-				CTranslatorUtils::OidCmpOperator(index_cond_expr);
-			GPOS_ASSERT(InvalidOid != cmp_operator_oid);
-			OID op_family_oid = CTranslatorUtils::GetOpFamilyForIndexQual(
-				attno, CMDIdGPDB::CastMdid(index->MDId())->Oid());
-			GPOS_ASSERT(InvalidOid != op_family_oid);
-			gpdb::IndexOpProperties(cmp_operator_oid, op_family_oid,
-									&strategy_num, &index_subtype_oid);
-
-			// create index qual
-			index_qual_info_array->Append(GPOS_NEW(m_mp) CIndexQualInfo(
-				attno, index_cond_expr, original_index_cond_expr, strategy_num,
-				index_subtype_oid));
-		}
 		if (modified_null_test_cond_dxlnode != nullptr)
 		{
 			modified_null_test_cond_dxlnode->Release();
@@ -1306,10 +1287,6 @@ CTranslatorDXLToPlStmt::TranslateIndexConditions(
 		*index_cond = gpdb::LAppend(*index_cond, index_qual_info->m_expr);
 		*index_orig_cond =
 			gpdb::LAppend(*index_orig_cond, index_qual_info->m_original_expr);
-		*index_strategy_list = gpdb::LAppendInt(
-			*index_strategy_list, index_qual_info->m_index_subtype_oid);
-		*index_subtype_list = gpdb::LAppendOid(
-			*index_subtype_list, index_qual_info->m_index_subtype_oid);
 	}
 
 	// clean up
@@ -1706,6 +1683,7 @@ CTranslatorDXLToPlStmt::TranslateDXLTvf(
 	rtfunc->funccoltypes = NIL;
 	rtfunc->funccoltypmods = NIL;
 	rtfunc->funccolcollations = NIL;
+	rtfunc->funccolcount = gpdb::ListLength(target_list);
 	ForEach(lc_target_entry, target_list)
 	{
 		TargetEntry *target_entry = (TargetEntry *) lfirst(lc_target_entry);
@@ -1808,7 +1786,6 @@ CTranslatorDXLToPlStmt::TranslateDXLTvfToRangeTblEntry(
 		const_expr->constvalue = gpdb::DatumFromPointer(str);
 
 		rtfunc->funcexpr = (Node *) const_expr;
-		rtfunc->funccolcount = (int) num_of_cols;
 	}
 	else
 	{
@@ -1855,6 +1832,7 @@ CTranslatorDXLToPlStmt::TranslateDXLTvfToRangeTblEntry(
 		rtfunc->funcexpr = (Node *) func_expr;
 	}
 
+	rtfunc->funccolcount = (int) num_of_cols;
 	rtfunc->funcparams = funcparams;
 	// GPDB_91_MERGE_FIXME: collation
 	// set rtfunc->funccoltypemods & rtfunc->funccolcollations?
@@ -3302,105 +3280,6 @@ CTranslatorDXLToPlStmt::TranslateDXLSort(
 	return (Plan *) sort;
 }
 
-//---------------------------------------------------------------------------
-//	@function:
-//		CTranslatorDXLToPlStmt::TranslateDXLSubQueryScan
-//
-//	@doc:
-//		Translate DXL subquery scan node into GPDB SubqueryScan plan node
-//
-//---------------------------------------------------------------------------
-Plan *
-CTranslatorDXLToPlStmt::TranslateDXLSubQueryScan(
-	const CDXLNode *subquery_scan_dxlnode, CDXLTranslateContext *output_context,
-	CDXLTranslationContextArray *ctxt_translation_prev_siblings)
-{
-	// create sort plan node
-	SubqueryScan *subquery_scan = MakeNode(SubqueryScan);
-
-	Plan *plan = &(subquery_scan->scan.plan);
-	plan->plan_node_id = m_dxl_to_plstmt_context->GetNextPlanId();
-
-	CDXLPhysicalSubqueryScan *subquery_scan_dxlop =
-		CDXLPhysicalSubqueryScan::Cast(subquery_scan_dxlnode->GetOperator());
-
-	// translate operator costs
-	TranslatePlanCosts(subquery_scan_dxlnode, plan);
-
-	// translate subplan
-	CDXLNode *child_dxlnode = (*subquery_scan_dxlnode)[EdxlsubqscanIndexChild];
-	CDXLNode *project_list_dxlnode =
-		(*subquery_scan_dxlnode)[EdxlsubqscanIndexProjList];
-	CDXLNode *filter_dxlnode =
-		(*subquery_scan_dxlnode)[EdxlsubqscanIndexFilter];
-
-	CDXLTranslateContext child_context(m_mp, false,
-									   output_context->GetColIdToParamIdMap());
-
-	Plan *child_plan = TranslateDXLOperatorToPlan(
-		child_dxlnode, &child_context, ctxt_translation_prev_siblings);
-
-	// create an rtable entry for the subquery scan
-	RangeTblEntry *rte = MakeNode(RangeTblEntry);
-	rte->rtekind = RTE_SUBQUERY;
-
-	Alias *alias = MakeNode(Alias);
-	alias->colnames = NIL;
-
-	// get table alias
-	alias->aliasname = CTranslatorUtils::CreateMultiByteCharStringFromWCString(
-		subquery_scan_dxlop->MdName()->GetMDName()->GetBuffer());
-
-	// get column names from child project list
-	CDXLTranslateContextBaseTable base_table_context(m_mp);
-
-	Index index =
-		gpdb::ListLength(m_dxl_to_plstmt_context->GetRTableEntriesList()) + 1;
-	(subquery_scan->scan).scanrelid = index;
-	base_table_context.SetRelIndex(index);
-
-	ListCell *lc_tgtentry = nullptr;
-
-	CDXLNode *child_proj_list_dxlnode = (*child_dxlnode)[0];
-
-	ULONG ul = 0;
-
-	ForEach(lc_tgtentry, child_plan->targetlist)
-	{
-		TargetEntry *target_entry = (TargetEntry *) lfirst(lc_tgtentry);
-
-		// non-system attribute
-		CHAR *col_name_char_array = PStrDup(target_entry->resname);
-		Value *val_colname = gpdb::MakeStringValue(col_name_char_array);
-		alias->colnames = gpdb::LAppend(alias->colnames, val_colname);
-
-		// get corresponding child project element
-		CDXLScalarProjElem *sc_proj_elem_dxlop = CDXLScalarProjElem::Cast(
-			(*child_proj_list_dxlnode)[ul]->GetOperator());
-
-		// save mapping col id -> index in translate context
-		(void) base_table_context.InsertMapping(sc_proj_elem_dxlop->Id(),
-												target_entry->resno);
-		ul++;
-	}
-
-	rte->eref = alias;
-
-	// add range table entry for the subquery to the list
-	m_dxl_to_plstmt_context->AddRTE(rte);
-
-	// translate proj list and filter
-	TranslateProjListAndFilter(
-		project_list_dxlnode, filter_dxlnode,
-		&base_table_context,  // translate context for the base table
-		nullptr, &plan->targetlist, &plan->qual, output_context);
-
-	subquery_scan->subplan = child_plan;
-
-	SetParamIds(plan);
-	return (Plan *) subquery_scan;
-}
-
 //------------------------------------------------------------------------------
 // If the top level is not a function returning set then we need to check if the
 // project element contains any SRF's deep down the tree. If we found any SRF's
@@ -4380,6 +4259,11 @@ CTranslatorDXLToPlStmt::TranslateDXLDynTblScan(
 		CMDIdGPDB::CastMdid(m_md_accessor->PtMDType<IMDTypeInt4>()->MDId())
 			->Oid();
 
+	const IMDRelation *md_rel =
+		m_md_accessor->RetrieveRel(dxl_table_descr->MDId());
+
+	OID oidRel = CMDIdGPDB::CastMdid(md_rel->MDId())->Oid();
+
 	dyn_seq_scan->join_prune_paramids =
 		TranslateJoinPruneParamids(dyn_tbl_scan_dxlop->GetSelectorIds(),
 								   oid_type, m_dxl_to_plstmt_context);
@@ -4398,11 +4282,29 @@ CTranslatorDXLToPlStmt::TranslateDXLDynTblScan(
 		(*dyn_tbl_scan_dxlnode)[EdxltsIndexProjList];
 	CDXLNode *filter_dxlnode = (*dyn_tbl_scan_dxlnode)[EdxltsIndexFilter];
 
+	// List to hold the quals which contain both security quals and query
+	// quals.
+	List *security_query_quals = NIL;
+
+	// List to hold the quals after translating filter_dxlnode node.
+	List *query_quals = NIL;
+
+	// Fetching the RTE of the relation from the rewritten parse tree
+	// based on the oidRel and adding the security quals of the RTE in
+	// the security_query_quals list.
+	AddSecurityQuals(oidRel, &security_query_quals, &index);
+
 	TranslateProjListAndFilter(
 		project_list_dxlnode, filter_dxlnode,
 		&base_table_context,  // translate context for the base table
 		nullptr,			  // translate_ctxt_left and pdxltrctxRight,
-		&plan->targetlist, &plan->qual, output_context);
+		&plan->targetlist, &query_quals, output_context);
+
+	// The security quals should always be executed first when compared to
+	// other quals. So appending query quals to the security_query_quals
+	// list after the security quals.
+	security_query_quals = gpdb::ListConcat(security_query_quals, query_quals);
+	plan->qual = security_query_quals;
 
 	SetParamIds(plan);
 
@@ -4478,8 +4380,6 @@ CTranslatorDXLToPlStmt::TranslateDXLDynIdxOnlyScan(
 	// translate index condition list
 	List *index_cond = NIL;
 	List *index_orig_cond = NIL;
-	List *index_strategy_list = NIL;
-	List *index_subtype_list = NIL;
 
 	TranslateIndexConditions(
 		(*dyn_idx_only_scan_dxlnode)
@@ -4487,8 +4387,7 @@ CTranslatorDXLToPlStmt::TranslateDXLDynIdxOnlyScan(
 		dyn_index_only_scan_dxlop->GetDXLTableDescr(),
 		false,	// is_bitmap_index_probe
 		md_index, md_rel, output_context, &base_table_context,
-		ctxt_translation_prev_siblings, &index_cond, &index_orig_cond,
-		&index_strategy_list, &index_subtype_list);
+		ctxt_translation_prev_siblings, &index_cond, &index_orig_cond);
 
 
 	dyn_idx_only_scan->indexscan.indexqual = index_cond;
@@ -4561,8 +4460,6 @@ CTranslatorDXLToPlStmt::TranslateDXLDynIdxScan(
 	// translate index condition list
 	List *index_cond = NIL;
 	List *index_orig_cond = NIL;
-	List *index_strategy_list = NIL;
-	List *index_subtype_list = NIL;
 
 	TranslateIndexConditions(
 		(*dyn_idx_only_scan_dxlnode)
@@ -4570,8 +4467,7 @@ CTranslatorDXLToPlStmt::TranslateDXLDynIdxScan(
 		dyn_index_scan_dxlop->GetDXLTableDescr(),
 		false,	// is_bitmap_index_probe
 		md_index, md_rel, output_context, &base_table_context,
-		ctxt_translation_prev_siblings, &index_cond, &index_orig_cond,
-		&index_strategy_list, &index_subtype_list);
+		ctxt_translation_prev_siblings, &index_cond, &index_orig_cond);
 
 
 	dyn_idx_only_scan->indexscan.indexqual = index_cond;
@@ -4839,16 +4735,21 @@ CTranslatorDXLToPlStmt::TranslateDXLDml(
 		GPOS_NEW(m_mp) CDXLTranslationContextArray(m_mp);
 	child_contexts->Append(&child_context);
 
-	// translate proj list
 	List *dml_target_list =
 		TranslateDXLProjList(project_list_dxlnode,
 							 nullptr,  // translate context for the base table
 							 child_contexts, output_context);
 
-	// pad child plan's target list with NULLs for dropped columns for all DML operator types
-	List *target_list_with_dropped_cols =
-		CreateTargetListWithNullsForDroppedCols(dml_target_list, md_rel);
-	dml_target_list = target_list_with_dropped_cols;
+	// project all columns for intermediate (mid-level) partitions, as we need to pass through the partition keys
+	// but do not have that information for intermediate partitions during Orca's optimization
+	BOOL is_intermediate_part =
+		(md_rel->IsPartitioned() && nullptr != md_rel->MDPartConstraint());
+	if (m_cmd_type != CMD_DELETE || is_intermediate_part)
+	{
+		// pad child plan's target list with NULLs for dropped columns for UPDATE/INSERTs and for DELETEs on intermeidate partitions
+		dml_target_list =
+			CreateTargetListWithNullsForDroppedCols(dml_target_list, md_rel);
+	}
 
 	// Add junk columns to the target list for the 'action', 'ctid',
 	// 'gp_segment_id'. The ModifyTable node will find these based
@@ -4882,7 +4783,7 @@ CTranslatorDXLToPlStmt::TranslateDXLDml(
 	result_plan->plan_node_id = m_dxl_to_plstmt_context->GetNextPlanId();
 	result_plan->lefttree = child_plan;
 
-	result_plan->targetlist = target_list_with_dropped_cols;
+	result_plan->targetlist = dml_target_list;
 	SetParamIds(result_plan);
 
 	child_plan = (Plan *) result;
@@ -5365,6 +5266,7 @@ CTranslatorDXLToPlStmt::ProcessDXLTblDescr(
 	}
 
 	rte->eref = alias;
+	rte->alias = alias;
 
 	// A new RTE is added to the range table entries list if it's not found in the look
 	// up table. However, it is only added to the look up table if it's a result relation
@@ -5824,6 +5726,185 @@ CTranslatorDXLToPlStmt::TranslateProjListAndFilter(
 		child_contexts, output_context);
 }
 
+//-----------------------------------------------------------------------------
+//	@function:
+//		CTranslatorDXLToPlStmt::AddSecurityQuals
+//
+//	@doc:
+//		This method is used to fetch the range table entry from the rewritten
+//		parse tree based on the relId and add it's security quals in the quals
+//		list. It also modifies the varno of the VAR node present in the
+//		security quals and assigns it the value of the index i.e. the
+//		position of this rte at m_dxl_to_plstmt_context->m_rtable_entries_list
+//		(shortened as "rte_list")
+//
+//---------------------------------------------------------------------------
+void
+CTranslatorDXLToPlStmt::AddSecurityQuals(OID relId, List **qual, Index *index)
+{
+	SContextSecurityQuals ctxt_security_quals(relId);
+
+	// Find the RTE in the parse tree based on the relId and add the security
+	// quals of that RTE to the m_security_quals list present in
+	// ctxt_security_quals struct.
+	FetchSecurityQuals(m_dxl_to_plstmt_context->m_orig_query,
+					   &ctxt_security_quals);
+
+	// The varno of the columns related to a particular table is different in
+	// the rewritten parse tree and the planned statement tree. In planned
+	// statement the varno of the columns is based on the index of the RTE
+	// at m_dxl_to_plstmt_context->m_rtable_entries_list. Since we are adding
+	// the security quals from the rewritten parse tree to planned statement
+	// tree we need to modify the varno of all the VAR nodes present in the
+	// security quals and assign it equal to index of the RTE in the rte_list.
+	SetSecurityQualsVarnoWalker((Node *) ctxt_security_quals.m_security_quals,
+								index);
+
+	// Adding the security quals from m_security_quals list to the qual list
+	*qual = gpdb::ListConcat(*qual, ctxt_security_quals.m_security_quals);
+}
+
+//---------------------------------------------------------------------------
+//	@function:
+//		CTranslatorDXLToPlStmt::FetchSecurityQuals
+//
+//	@doc:
+//		This method is used to walk the entire rewritten parse tree and
+//		search for a range table entry whose relid is equal to the m_relId
+//		field of ctxt_security_quals struct. On finding the RTE this method
+//		will also add the security quals present in it to the
+//		m_security_quals list of ctxt_security_quals struct.
+//
+//---------------------------------------------------------------------------
+BOOL
+CTranslatorDXLToPlStmt::FetchSecurityQuals(
+	Query *parsetree, SContextSecurityQuals *ctxt_security_quals)
+{
+	ListCell *lc;
+
+	// Iterate through all the range table entries present in the the rtable
+	// of the parsetree and search for a range table entry whose relid is
+	// equal to ctxt_security_quals->m_relId. If found then add the security
+	// quals of that RTE in the ctxt_security_quals->m_security_quals list.
+	// If the range table entry contains a subquery then recurse through that
+	// subquery and continue the search.
+	foreach (lc, parsetree->rtable)
+	{
+		RangeTblEntry *rte = (RangeTblEntry *) lfirst(lc);
+		if (RTE_RELATION == rte->rtekind &&
+			rte->relid == ctxt_security_quals->m_relId)
+		{
+			ctxt_security_quals->m_security_quals = gpdb::ListConcat(
+				ctxt_security_quals->m_security_quals, rte->securityQuals);
+			return true;
+		}
+
+		if ((RTE_SUBQUERY == rte->rtekind ||
+			 RTE_TABLEFUNCTION == rte->rtekind) &&
+			FetchSecurityQuals(rte->subquery, ctxt_security_quals))
+		{
+			return true;
+		}
+	}
+
+	// Recurse into ctelist
+	foreach (lc, parsetree->cteList)
+	{
+		CommonTableExpr *cte = lfirst_node(CommonTableExpr, lc);
+
+		if (FetchSecurityQuals(castNode(Query, cte->ctequery),
+							   ctxt_security_quals))
+		{
+			return true;
+		}
+	}
+
+	// Recurse into sublink subqueries. We have already recursed the sublink
+	// subqueries present in the rtable and ctelist. QTW_IGNORE_RC_SUBQUERIES
+	// flag indicates to avoid recursing subqueries present in rtable and
+	// ctelist
+	if (parsetree->hasSubLinks)
+	{
+		return gpdb::WalkQueryTree(
+			parsetree,
+			(BOOL(*)()) CTranslatorDXLToPlStmt::FetchSecurityQualsWalker,
+			ctxt_security_quals, QTW_IGNORE_RC_SUBQUERIES);
+	}
+
+	return false;
+}
+
+//---------------------------------------------------------------------------
+//	@function:
+//		CTranslatorDXLToPlStmt::FetchSecurityQualsWalker
+//
+//	@doc:
+//		This method is a walker to recurse into SUBLINK nodes and search for
+//		an RTE having relid equal to m_relId field of ctxt_security_quals struct
+//
+//---------------------------------------------------------------------------
+BOOL
+CTranslatorDXLToPlStmt::FetchSecurityQualsWalker(
+	Node *node, SContextSecurityQuals *ctxt_security_quals)
+{
+	if (nullptr == node)
+	{
+		return false;
+	}
+
+	// If the node is a SUBLINK, fetch its subselect node and start the
+	// search again for the RTE based on the m_relId field of
+	// ctxt_security_quals struct. If we found the RTE then the flag
+	// m_found_rte would have been set to true. In that case returning true
+	// which indicates to abort the walk immediately.
+	if (IsA(node, SubLink))
+	{
+		SubLink *sub = (SubLink *) node;
+
+		if (FetchSecurityQuals(castNode(Query, sub->subselect),
+							   ctxt_security_quals))
+		{
+			return true;
+		}
+	}
+
+	return gpdb::WalkExpressionTree(
+		node, (BOOL(*)()) CTranslatorDXLToPlStmt::FetchSecurityQualsWalker,
+		ctxt_security_quals);
+}
+
+//-----------------------------------------------------------------------------
+//	@function:
+//		CTranslatorDXLToPlStmt::SetSecurityQualsVarnoWalker
+//
+//	@doc:
+//		The varno of the columns related to a particular table is different in
+//		the rewritten parse tree and the planned statement tree. In planned
+//		statement the varno of the columns is based on the index of the RTE at
+//		m_dxl_to_plstmt_context->m_rtable_entries_list. Since we are adding
+//		the security quals from the rewritten parse tree to planned statement
+//		tree we need to modify the varno of all the VAR nodes present in the
+//		security quals and assign it equal to index of the RTE in the rte_list.
+//
+//---------------------------------------------------------------------------
+BOOL
+CTranslatorDXLToPlStmt::SetSecurityQualsVarnoWalker(Node *node, Index *index)
+{
+	if (nullptr == node)
+	{
+		return false;
+	}
+
+	if (IsA(node, Var))
+	{
+		((Var *) node)->varno = *index;
+		return false;
+	}
+
+	return gpdb::WalkExpressionTree(
+		node, (BOOL(*)()) CTranslatorDXLToPlStmt::SetSecurityQualsVarnoWalker,
+		index);
+}
 
 //---------------------------------------------------------------------------
 //	@function:
@@ -6621,14 +6702,11 @@ CTranslatorDXLToPlStmt::TranslateDXLBitmapIndexProbe(
 	CDXLNode *index_cond_list_dxlnode = (*bitmap_index_probe_dxlnode)[0];
 	List *index_cond = NIL;
 	List *index_orig_cond = NIL;
-	List *index_strategy_list = NIL;
-	List *index_subtype_list = NIL;
 
 	TranslateIndexConditions(
 		index_cond_list_dxlnode, table_descr, true /*is_bitmap_index_probe*/,
 		index, md_rel, output_context, base_table_context,
-		ctxt_translation_prev_siblings, &index_cond, &index_orig_cond,
-		&index_strategy_list, &index_subtype_list);
+		ctxt_translation_prev_siblings, &index_cond, &index_orig_cond);
 
 	bitmap_idx_scan->indexqual = index_cond;
 	bitmap_idx_scan->indexqualorig = index_orig_cond;

@@ -55,6 +55,11 @@ private:
 	CDistributionSpec *PdsMatch(CMemoryPool *mp, CDistributionSpec *pds,
 								ULONG ulSourceChildIndex) const;
 
+	// helper for deriving hash join distribution from hashed children
+	CDistributionSpec *PdsDeriveFromHashedChildren(
+		CMemoryPool *mp, CExpressionHandle &exprhdl,
+		CDistributionSpec *pdsOuter, CDistributionSpec *pdsInner) const;
+
 protected:
 	// compute required hashed distribution from the n-th child
 	CDistributionSpecHashed *PdshashedRequired(CMemoryPool *mp,
@@ -70,6 +75,9 @@ protected:
 
 	// create the set of redistribute requests to send to first hash join child
 	void CreateHashRedistributeRequests(CMemoryPool *mp);
+
+	BOOL FSelfJoinWithMatchingJoinKeys(CMemoryPool *mp,
+									   CExpressionHandle &exprhdl) const;
 
 private:
 	// create (non-singleton, replicate) optimization request
@@ -127,6 +135,9 @@ protected:
 	CPartitionPropagationSpec *PppsDeriveForJoins(
 		CMemoryPool *mp, CExpressionHandle &exprhdl) const;
 
+	CDistributionSpec *PdsDeriveForOuterJoin(CMemoryPool *mp,
+											 CExpressionHandle &exprhdl) const;
+
 public:
 	CPhysicalHashJoin(const CPhysicalHashJoin &) = delete;
 
@@ -182,6 +193,9 @@ public:
 						   CDrvdPropArray *pdrgpdpCtxt,
 						   ULONG ulDistrReq) override;
 
+	CEnfdDistribution *PedRightOrFullJoin(
+		CMemoryPool *mp, CExpressionHandle &exprhdl, CReqdPropPlan *prppInput,
+		ULONG child_index, CDrvdPropArray *pdrgpdpCtxt, ULONG ulOptReq);
 	//-------------------------------------------------------------------------------------
 	// Derived Plan Properties
 	//-------------------------------------------------------------------------------------

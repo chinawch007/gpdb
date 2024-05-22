@@ -54,6 +54,7 @@
 #include "utils/resource_manager.h"
 #include "utils/varlena.h"
 #include "utils/vmem_tracker.h"
+#include "optimizer/optimizer.h"
 
 /*
  * These constants are copied from guc.c. They should not bitrot when we
@@ -112,6 +113,7 @@ bool        gp_guc_need_restore = false;
 
 char	   *Debug_dtm_action_sql_command_tag;
 
+bool		Debug_shareinput_xslice = false;
 bool		Debug_print_full_dtm = false;
 bool		Debug_print_snapshot_dtm = false;
 bool		Debug_disable_distributed_snapshot = false;
@@ -223,15 +225,20 @@ double		gp_resource_group_cpu_limit;
 bool		gp_resource_group_bypass;
 bool		gp_resource_group_bypass_catalog_query;
 bool		gp_resource_group_bypass_direct_dispatch;
+char	   *gp_resource_group_cgroup_parent;
 
 /* Metrics collector debug GUC */
 bool		vmem_process_interrupt = false;
 bool		execute_pruned_plan = false;
 
+/* partitioning GUC */
+int			gp_max_partition_level;
+
 /* Upgrade & maintenance GUCs */
 bool		gp_maintenance_mode;
 bool		gp_maintenance_conn;
 bool		allow_segment_DML;
+bool		gp_enable_statement_trigger;
 
 /* Time based authentication GUC */
 char	   *gp_auth_time_override_str = NULL;
@@ -263,6 +270,7 @@ bool		gp_enable_relsize_collection = false;
 bool		gp_recursive_cte = true;
 bool		gp_eager_two_phase_agg = false;
 bool		gp_force_random_redistribution = false;
+bool		gp_enable_ao_indexscan = true;
 
 /* Optimizer related gucs */
 bool		optimizer;
@@ -325,7 +333,9 @@ bool		optimizer_enable_dml_constraints;
 bool		optimizer_enable_coordinator_only_queries;
 bool		optimizer_enable_hashjoin;
 bool		optimizer_enable_dynamictablescan;
+bool		optimizer_enable_dynamicindexscan;
 bool		optimizer_enable_dynamicindexonlyscan;
+bool		optimizer_enable_dynamicbitmapscan;
 bool		optimizer_enable_indexscan;
 bool		optimizer_enable_indexonlyscan;
 bool		optimizer_enable_tablescan;
@@ -337,6 +347,8 @@ bool		optimizer_enable_redistribute_nestloop_loj_inner_child;
 bool		optimizer_force_comprehensive_join_implementation;
 bool		optimizer_enable_replicated_table;
 bool		optimizer_enable_foreign_table;
+bool		optimizer_enable_right_outer_join;
+bool		optimizer_enable_query_parameter;
 
 /* Optimizer plan enumeration related GUCs */
 bool		optimizer_enumerate_plans;
@@ -401,7 +413,7 @@ bool		optimizer_replicated_table_insert;
 
 /* GUCs for slice table*/
 int			gp_max_slices;
-
+int			gp_max_system_slices;
 /* System Information */
 static int	gp_server_version_num;
 static char *gp_server_version_string;
@@ -440,6 +452,12 @@ bool		gp_allow_date_field_width_5digits = false;
 double		optimizer_jit_above_cost;
 double		optimizer_jit_inline_above_cost;
 double		optimizer_jit_optimize_above_cost;
+
+/* Switch to toggle block-directory based sampling for AO/CO tables */
+bool		gp_enable_blkdir_sampling;
+
+/* GUC to set interval for streaming archival status */
+int wal_sender_archiving_status_interval;
 
 static const struct config_enum_entry gp_log_format_options[] = {
 	{"text", 0},
@@ -630,12 +648,35 @@ struct config_bool ConfigureNamesBool_gp[] =
 		false,
 		NULL, NULL, NULL
 	},
+
+	{
+		{"gp_enable_statement_trigger", PGC_USERSET, CUSTOM_OPTIONS,
+			gettext_noop("Enables statement triggers to be created instead of erroring out."),
+			NULL,
+			GUC_NOT_IN_SAMPLE
+		},
+		&gp_enable_statement_trigger,
+		false,
+		NULL, NULL, NULL
+	},
+
 	{
 		{"enable_groupagg", PGC_USERSET, QUERY_TUNING_METHOD,
 			gettext_noop("Enables the planner's use of grouping aggregation plans."),
 			NULL
 		},
 		&enable_groupagg,
+		true,
+		NULL, NULL, NULL
+	},
+	{
+		{"gp_enable_blkdir_sampling", PGC_USERSET, DEVELOPER_OPTIONS,
+		 gettext_noop("Enables the use of an append-optimized table's block "
+					  "directory for sampling (if one is present)."),
+		 NULL,
+		 GUC_NO_SHOW_ALL | GUC_NOT_IN_SAMPLE
+		},
+		&gp_enable_blkdir_sampling,
 		true,
 		NULL, NULL, NULL
 	},
@@ -1469,6 +1510,17 @@ struct config_bool ConfigureNamesBool_gp[] =
 	},
 
 	{
+		{"debug_shareinput_xslice", PGC_SUSET, LOGGING_WHAT,
+		 gettext_noop("Prints cross-slice share input scan information to server log."),
+		 NULL,
+		 GUC_SUPERUSER_ONLY | GUC_NO_SHOW_ALL | GUC_NOT_IN_SAMPLE
+		},
+		&Debug_shareinput_xslice,
+		false,
+		NULL, NULL, NULL
+	},
+
+	{
 		{"gp_disable_tuple_hints", PGC_USERSET, DEVELOPER_OPTIONS,
 			gettext_noop("Specify if hint bits on tuples should be deferred."),
 			NULL,
@@ -1813,6 +1865,17 @@ struct config_bool ConfigureNamesBool_gp[] =
 		},
 		&gp_force_random_redistribution,
 		false, NULL, NULL
+	},
+
+	{
+		{"gp_enable_ao_indexscan", PGC_USERSET, QUERY_TUNING_METHOD,
+		 gettext_noop("Enable regular Index scans for append-optimized tables."),
+		 NULL,
+		 GUC_NOT_IN_SAMPLE
+		},
+		&gp_enable_ao_indexscan,
+		true,
+		NULL, NULL, NULL
 	},
 
 	{
@@ -2229,6 +2292,17 @@ struct config_bool ConfigureNamesBool_gp[] =
 	},
 
 	{
+			{"optimizer_enable_dynamicindexscan", PGC_USERSET, QUERY_TUNING_METHOD,
+					gettext_noop("Enables the optimizer's use of plans with dynamic index scan."),
+					NULL,
+					GUC_NOT_IN_SAMPLE
+			},
+			&optimizer_enable_dynamicindexscan,
+			true,
+			NULL, NULL, NULL
+	},
+
+	{
 		{"optimizer_enable_dynamicindexonlyscan", PGC_USERSET, QUERY_TUNING_METHOD,
 			gettext_noop("Enables the optimizer's use of plans with dynamic index only scan."),
 			NULL,
@@ -2237,6 +2311,17 @@ struct config_bool ConfigureNamesBool_gp[] =
 		&optimizer_enable_dynamicindexonlyscan,
 		true,
 		NULL, NULL, NULL
+	},
+
+	{
+			{"optimizer_enable_dynamicbitmapscan", PGC_USERSET, QUERY_TUNING_METHOD,
+					gettext_noop("Enables the optimizer's use of plans with dynamic bitmap scan."),
+					NULL,
+					GUC_NOT_IN_SAMPLE
+			},
+			&optimizer_enable_dynamicbitmapscan,
+			true,
+			NULL, NULL, NULL
 	},
 
 	{
@@ -2648,14 +2733,13 @@ struct config_bool ConfigureNamesBool_gp[] =
 	},
 
 	{
-		{"gp_reject_internal_tcp_connection", PGC_POSTMASTER,
-			DEVELOPER_OPTIONS,
-			gettext_noop("Permit internal TCP connections to the coordinator."),
+		{"gp_reject_internal_tcp_connection", PGC_POSTMASTER, DEFUNCT_OPTIONS,
+			gettext_noop("Unused. Syntax check only for GPDB compatibility."),
 			NULL,
 			GUC_NO_SHOW_ALL | GUC_NOT_IN_SAMPLE
 		},
 		&gp_reject_internal_tcp_conn,
-		true,
+		false,
 		NULL, NULL, NULL
 	},
 
@@ -2913,17 +2997,6 @@ struct config_bool ConfigureNamesBool_gp[] =
 		false,
 		NULL, NULL, NULL
 	},
-
-	{
-		{"gp_pause_on_restore_point_replay", PGC_SIGHUP, DEVELOPER_OPTIONS,
-		 gettext_noop("Pause recovery when a restore point is replayed."),
-		 NULL,
-		 GUC_NO_SHOW_ALL | GUC_NOT_IN_SAMPLE
-		},
-		&gp_pause_on_restore_point_replay,
-		false,
-		NULL, NULL, NULL
-	},
 	{
 		{"gp_autostats_allow_nonowner", PGC_SUSET, DEVELOPER_OPTIONS,
 			gettext_noop("Allow automatic stats collection on tables even for users who are not the owner of the relation."),
@@ -2971,6 +3044,38 @@ struct config_bool ConfigureNamesBool_gp[] =
 		 GUC_NOT_IN_SAMPLE
 		},
 		&optimizer_enable_foreign_table,
+		true,
+		NULL, NULL, NULL
+	},
+	{
+		{"optimizer_enable_right_outer_join", PGC_USERSET, QUERY_TUNING_METHOD,
+		 gettext_noop("Enable Orca to generate plans containing right outer joins."),
+		 gettext_noop("Right outer join can be re-written from left outer join. "
+					  "However, there are scenarios due to cardinality and cost "
+					  "misestimation, right outer join plan may be sub-optimal and "
+					  "can either be slower than the left outer join plan alternative "
+					  "or hit out-of-memory (OOM). The root cause can be identified "
+					  "by viewing the explain analyze plan and observing that the "
+					  "right outer join plan node is consuming all resources "
+					  "(CPU/memory) or the explain analyze itself hits OOM. By "
+					  "setting this GUC value to \"false\" users can force GPORCA to "
+					  "generate an equivalent left outer join plan. We recommend that "
+					  "the GUC be set at the query level as there can be several use "
+					  "cases where right outer join is the best plan alternative to "
+					  "choose."),
+		 GUC_NOT_IN_SAMPLE
+		},
+		&optimizer_enable_right_outer_join,
+		true,
+		NULL, NULL, NULL
+	},
+	{
+		{"optimizer_enable_query_parameter", PGC_USERSET, DEVELOPER_OPTIONS,
+		 gettext_noop("Enable query parameters in Orca."),
+		 NULL,
+		 GUC_NOT_IN_SAMPLE
+		},
+		&optimizer_enable_query_parameter,
 		true,
 		NULL, NULL, NULL
 	},
@@ -3166,6 +3271,17 @@ struct config_int ConfigureNamesInt_gp[] =
 		},
 		&gp_max_plan_size,
 		0, 0, MAX_KILOBYTES,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"gp_max_partition_level", PGC_SUSET, PRESET_OPTIONS,
+			gettext_noop("Sets the maximum number of levels allowed when creating a partitioned table using Greenplum classic syntax."),
+			gettext_noop("Use 0 for no limit."),
+			GUC_SUPERUSER_ONLY
+		},
+		&gp_max_partition_level,
+		0, 0, INT_MAX,
 		NULL, NULL, NULL
 	},
 
@@ -4238,6 +4354,16 @@ struct config_int ConfigureNamesInt_gp[] =
 	},
 
 	{
+		{"gp_max_system_slices", PGC_SUSET, PRESET_OPTIONS,
+			gettext_noop("Maximum slices for a single query (superuser guc)"),
+			NULL,
+			GUC_NOT_IN_SAMPLE
+		},
+		&gp_max_system_slices,
+		0, 0, INT_MAX, NULL, NULL
+	},
+
+	{
 		{"gp_dispatch_keepalives_idle", PGC_POSTMASTER, GP_ARRAY_TUNING,
 			gettext_noop("Time between issuing TCP keepalives from GPDB QD to its QEs."),
 			gettext_noop("A value of 0 uses the system default."),
@@ -4282,6 +4408,16 @@ struct config_int ConfigureNamesInt_gp[] =
 		NULL, NULL, NULL
 	},
 
+	{
+		{"wal_sender_archiving_status_interval", PGC_SIGHUP, REPLICATION_SENDING,
+			gettext_noop("Sets the maximum interval for streaming archival status to standby"),
+			NULL, GUC_UNIT_MS
+		},
+		&wal_sender_archiving_status_interval,
+		10000, 0, INT_MAX,
+		NULL, NULL, NULL
+	},
+
 #ifdef GP_ALLOC_DEBUG
 	{
 		{"gp_max_alloc_size", PGC_USERSET, DEVELOPER_OPTIONS,
@@ -4311,6 +4447,18 @@ struct config_real ConfigureNamesReal_gp[] =
 		},
 		&disable_cost,
 		1.0e10, 1.0e10, 1.0e30,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"gp_cpu_decompress_cost", PGC_USERSET, QUERY_TUNING_COST,
+		 gettext_noop("Sets the planner's estimate of the cost of "
+					  "decompressing a varblock for append-optimized tables."),
+		 NULL,
+		 GUC_EXPLAIN
+		},
+		&gp_cpu_decompress_cost,
+		DEFAULT_GP_DECOMPRESS_COST, 0, DBL_MAX,
 		NULL, NULL, NULL
 	},
 
@@ -4549,6 +4697,17 @@ struct config_string ConfigureNamesString_gp[] =
 		gpvars_show_gp_resource_manager_policy,
 	},
 
+	{
+		{"gp_resource_group_cgroup_parent", PGC_POSTMASTER, RESOURCES,
+			gettext_noop("The root of gpdb cgroup hierarchy."),
+			NULL,
+			GUC_SUPERUSER_ONLY
+		},
+		&gp_resource_group_cgroup_parent,
+		"gpdb.service",
+		gpvars_check_gp_resource_group_cgroup_parent, NULL, NULL
+	},
+
 	/* for pljava */
 	{
 		{"pljava_vmoptions", PGC_SUSET, CUSTOM_OPTIONS,
@@ -4627,6 +4786,18 @@ struct config_string ConfigureNamesString_gp[] =
 		NULL, NULL, NULL
 	},
 #endif  /* ENABLE_IC_PROXY */
+
+	{
+		{"gp_pause_on_restore_point_replay", PGC_SUSET, DEVELOPER_OPTIONS,
+			gettext_noop("Specifies the restore point to pause replay on."),
+			gettext_noop("Unlike recovery_target_name, this can be used to continuously set/reset "
+						"how much a standby should replay up to."),
+			GUC_NO_SHOW_ALL | GUC_NOT_IN_SAMPLE
+		},
+		&gp_pause_on_restore_point_replay,
+		"",
+		NULL, NULL, NULL
+	},
 
 	/* End-of-list marker */
 	{
@@ -4878,7 +5049,7 @@ struct config_enum ConfigureNamesEnum_gp[] =
 	},
 
 	{
-		{"gp_postmaster_inet_address_family", PGC_POSTMASTER, CUSTOM_OPTIONS,
+		{"gp_postmaster_address_family", PGC_POSTMASTER, CUSTOM_OPTIONS,
 			gettext_noop("Specifies the address family used by postmaster listener sockets."),
 			gettext_noop("Valid values are auto, ipv4 and ipv6."), 
 			GUC_SUPERUSER_ONLY | GUC_NO_SHOW_ALL | GUC_NOT_IN_SAMPLE

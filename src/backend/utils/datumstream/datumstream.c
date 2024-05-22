@@ -432,7 +432,19 @@ init_datumstream_info(
 				ao_attr->compressType = "zlib";
 				ao_attr->compressLevel = 9;
 				break;
+#ifdef USE_ZSTD
+			case 5:
+				ao_attr->compress = true;
+				ao_attr->compressType = "zstd";
+				ao_attr->compressLevel = 1;
+				break;
 
+			case 6:
+				ao_attr->compress = true;
+				ao_attr->compressType = "zstd";
+				ao_attr->compressLevel = 3; /* zstd recommended default */
+				break;
+#endif
 			default:
 				ereport(ERROR,
 						(errmsg("Unexpected compresslevel %d",
@@ -862,6 +874,12 @@ datumstreamread_close_file(DatumStreamRead * ds)
 {
 	AppendOnlyStorageRead_CloseFile(&ds->ao_read);
 
+	/*
+	 * Reset blockRowCount as file being closed,
+	 * which also helps to direct to next segfile
+	 * reading in sampling scenario.
+	 */
+	ds->blockRowCount = 0;
 	ds->need_close_file = false;
 }
 

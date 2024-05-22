@@ -17,6 +17,9 @@ test: concurrent_partition_table_operations_should_not_deadlock
 test: select_dropped_table
 test: update_hash_col_utilitymode execute_on_utilitymode
 
+# Test to check root stats updation
+test: merge_root_stats
+
 # Tests for crash recovery
 test: uao_crash_compaction_column
 test: uao_crash_compaction_row
@@ -70,6 +73,7 @@ test: misc
 
 test: starve_case pg_views_concurrent_drop alter_blocks_for_update_and_viceversa drop_rename reader_waits_for_lock bitmap_index_ao_sparse
 
+test: create_index_deadlock
 
 # below test(s) inject faults so each of them need to be in a separate group
 test: pg_terminate_backend
@@ -95,8 +99,9 @@ test: bitmap_index_crash
 test: bitmap_update_words_backup_block
 test: bitmap_index_inspect
 
-# below test utilizes fault injectors so it needs to be in a group by itself
+# below tests utilize fault injectors so it needs to be in a group by itself
 test: external_table
+test: pqsignal
 
 test: fsync_ao
 
@@ -146,6 +151,7 @@ test: uao/selectinsert_while_vacuum_row
 test: uao/selectinsertupdate_while_vacuum_row
 test: uao/selectupdate_while_vacuum_row
 test: uao/snapshot_index_corruption_row
+test: uao/tablesample_row
 test: uao/update_while_vacuum_row
 test: uao/vacuum_self_serializable_row
 test: uao/vacuum_self_serializable2_row
@@ -213,6 +219,7 @@ test: uao/selectinsert_while_vacuum_column
 test: uao/selectinsertupdate_while_vacuum_column
 test: uao/selectupdate_while_vacuum_column
 test: uao/snapshot_index_corruption_column
+test: uao/tablesample_column
 test: uao/update_while_vacuum_column
 test: uao/vacuum_self_serializable_column
 test: uao/vacuum_self_serializable2_column
@@ -286,6 +293,7 @@ test: segwalrep/hintbit_throttle
 test: fts_manual_probe
 test: fts_session_reset
 test: fts_segment_reset
+test: fts_doublefault
 
 # Reindex tests
 test: reindex/abort_reindex

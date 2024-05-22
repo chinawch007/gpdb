@@ -132,6 +132,11 @@ private:
 		CMemoryPool *mp, CParseHandlerManager *parse_handler_mgr,
 		CParseHandlerBase *parse_handler_root);
 
+	// construct plan hint parse handler
+	static CParseHandlerBase *CreatePlanHintParseHandler(
+		CMemoryPool *mp, CParseHandlerManager *parse_handler_mgr,
+		CParseHandlerBase *parse_handler_root);
+
 	// construct window oids parse handler
 	static CParseHandlerBase *CreateWindowOidsParseHandler(
 		CMemoryPool *mp, CParseHandlerManager *parse_handler_mgr,
@@ -554,6 +559,11 @@ private:
 
 	// construct a scalar operator parse handler
 	static CParseHandlerBase *CreateScOpExprParseHandler(
+		CMemoryPool *mp, CParseHandlerManager *parse_handler_mgr,
+		CParseHandlerBase *parse_handler_root);
+
+	// construct a scalar param parse handler
+	static CParseHandlerBase *CreateScParamParseHandler(
 		CMemoryPool *mp, CParseHandlerManager *parse_handler_mgr,
 		CParseHandlerBase *parse_handler_root);
 

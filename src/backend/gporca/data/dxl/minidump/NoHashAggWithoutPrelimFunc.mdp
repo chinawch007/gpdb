@@ -31,6 +31,7 @@ select product_id,concat('#attribute_'||attribute_id::varchar||':'||attribute) a
           <dxl:CostParam Name="NLJFactor" Value="1.000000" LowerBound="0.500000" UpperBound="1.500000"/>
         </dxl:CostParams>
       </dxl:CostModelConfig>
+      <dxl:PlanHint/>
       <dxl:TraceFlags Value="101002,101013,102001,102002,102003,102016,102024,102025,102115,102116,102119,102120,102128,102144,103001,103014,103015,103027,103033"/>
     </dxl:OptimizerConfig>
     <dxl:Metadata SystemIds="0.GPDB">
@@ -960,7 +961,7 @@ select product_id,concat('#attribute_'||attribute_id::varchar||':'||attribute) a
         </dxl:StatsBucket>
       </dxl:ColumnStatistics>
       <dxl:RelationStatistics Mdid="2.1553603.1.1" Name="attribute_table" Rows="94.000000" EmptyRelation="false"/>
-      <dxl:Relation Mdid="6.1553603.1.1" Name="attribute_table" IsTemporary="false" StorageType="Heap" DistributionPolicy="Hash" DistributionColumns="0,1" Keys="16,10">
+      <dxl:Relation Mdid="6.1553603.1.1" Name="attribute_table" IsTemporary="false" Rows="94.000000" StorageType="Heap" DistributionPolicy="Hash" DistributionColumns="0,1" Keys="16,10">
         <dxl:Columns>
           <dxl:Column Name="product_id" Attno="1" Mdid="0.23.1.0" Nullable="true" ColWidth="4">
           </dxl:Column>

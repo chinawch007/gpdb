@@ -22,6 +22,7 @@
 #include "gpopt/base/CKeyCollection.h"
 #include "gpopt/base/CUtils.h"
 #include "gpopt/exception.h"
+#include "gpopt/hints/CHintUtils.h"
 #include "gpopt/operators/CExpressionHandle.h"
 #include "gpopt/operators/CLogicalAssert.h"
 #include "gpopt/operators/CLogicalBitmapTableGet.h"
@@ -2430,8 +2431,10 @@ CXformUtils::PexprBuildBtreeIndexPlan(CMemoryPool *mp, CMDAccessor *md_accessor,
 
 	BOOL fDynamicGet = (COperator::EopLogicalDynamicGet == op_id);
 
-	CTableDescriptor *ptabdesc = pexprGet->DeriveTableDescriptor();
-	GPOS_ASSERT(nullptr != ptabdesc);
+	CTableDescriptorHashSet *ptabdescset = pexprGet->DeriveTableDescriptor();
+	GPOS_ASSERT(1 == ptabdescset->Size());
+	CTableDescriptor *ptabdesc = ptabdescset->First();
+
 	CColRefArray *pdrgpcrOutput = nullptr;
 	CWStringConst *alias = nullptr;
 	ULONG ulPartIndex = gpos::ulong_max;
@@ -2504,7 +2507,7 @@ CXformUtils::PexprBuildBtreeIndexPlan(CMemoryPool *mp, CMDAccessor *md_accessor,
 	//
 	// (2) is valid only for Join2IndexApply xform wherein the index-get
 	// expression must include outer references for it to be an alternative
-	// worth considering. Otherwise it has the same effect as a regular NLJ
+	// worth considering. Otherwise, it has the same effect as a regular NLJ
 	// with an index lookup.
 	//
 	// Both (1) and (2) doesn't apply if index is used for ORDER BY. Because
@@ -2555,6 +2558,21 @@ CXformUtils::PexprBuildBtreeIndexPlan(CMemoryPool *mp, CMDAccessor *md_accessor,
 					GPOS_NEW(mp) CName(mp, CName(alias)), ulPartIndex,
 					pdrgpcrOutput, pdrgpdrgpcrPart, partition_mdids,
 					ulUnindexedPredColCount);
+			if (!CHintUtils::SatisfiesPlanHints(
+					CLogicalDynamicIndexOnlyGet::PopConvert(popLogicalGet),
+					COptCtxt::PoctxtFromTLS()
+						->GetOptimizerConfig()
+						->GetPlanHint()))
+			{
+				// clean up
+				GPOS_DELETE(alias);
+				pdrgppcrIndexCols->Release();
+				pdrgpexprResidual->Release();
+				pdrgpexprIndex->Release();
+				outer_refs_in_index_get->Release();
+				popLogicalGet->Release();
+				return nullptr;
+			}
 		}
 		else
 		{
@@ -2564,6 +2582,21 @@ CXformUtils::PexprBuildBtreeIndexPlan(CMemoryPool *mp, CMDAccessor *md_accessor,
 					GPOS_NEW(mp) CName(mp, CName(alias)), ulPartIndex,
 					pdrgpcrOutput, pdrgpdrgpcrPart, partition_mdids,
 					ulUnindexedPredColCount);
+			if (!CHintUtils::SatisfiesPlanHints(
+					CLogicalDynamicIndexGet::PopConvert(popLogicalGet),
+					COptCtxt::PoctxtFromTLS()
+						->GetOptimizerConfig()
+						->GetPlanHint()))
+			{
+				// clean up
+				GPOS_DELETE(alias);
+				pdrgppcrIndexCols->Release();
+				pdrgpexprResidual->Release();
+				pdrgpexprIndex->Release();
+				outer_refs_in_index_get->Release();
+				popLogicalGet->Release();
+				return nullptr;
+			}
 		}
 	}
 	else
@@ -2575,6 +2608,21 @@ CXformUtils::PexprBuildBtreeIndexPlan(CMemoryPool *mp, CMDAccessor *md_accessor,
 					mp, pmdindex, ptabdesc, ulOriginOpId,
 					GPOS_NEW(mp) CName(mp, CName(alias)), pdrgpcrOutput,
 					ulUnindexedPredColCount, indexscanDirection);
+			if (!CHintUtils::SatisfiesPlanHints(
+					CLogicalIndexOnlyGet::PopConvert(popLogicalGet),
+					COptCtxt::PoctxtFromTLS()
+						->GetOptimizerConfig()
+						->GetPlanHint()))
+			{
+				// clean up
+				GPOS_DELETE(alias);
+				pdrgppcrIndexCols->Release();
+				pdrgpexprResidual->Release();
+				pdrgpexprIndex->Release();
+				outer_refs_in_index_get->Release();
+				popLogicalGet->Release();
+				return nullptr;
+			}
 		}
 		else
 		{
@@ -2582,6 +2630,21 @@ CXformUtils::PexprBuildBtreeIndexPlan(CMemoryPool *mp, CMDAccessor *md_accessor,
 				mp, pmdindex, ptabdesc, ulOriginOpId,
 				GPOS_NEW(mp) CName(mp, CName(alias)), pdrgpcrOutput,
 				ulUnindexedPredColCount, indexscanDirection);
+			if (!CHintUtils::SatisfiesPlanHints(
+					CLogicalIndexGet::PopConvert(popLogicalGet),
+					COptCtxt::PoctxtFromTLS()
+						->GetOptimizerConfig()
+						->GetPlanHint()))
+			{
+				// clean up
+				GPOS_DELETE(alias);
+				pdrgppcrIndexCols->Release();
+				pdrgpexprResidual->Release();
+				pdrgpexprIndex->Release();
+				outer_refs_in_index_get->Release();
+				popLogicalGet->Release();
+				return nullptr;
+			}
 		}
 	}
 
@@ -3031,11 +3094,19 @@ CXformUtils::PexprBitmapSelectBestIndex(
 		pexprIndexFinal->AddRef();
 		(*ppexprRecheck) = pexprIndexFinal;
 
-		return GPOS_NEW(mp) CExpression(
-			mp,
-			GPOS_NEW(mp) CScalarBitmapIndexProbe(
-				mp, pindexdesc, pmdindex->GetIndexRetItemTypeMdid()),
-			pexprIndexFinal);
+		ptabdesc->AddRef();
+		CScalarBitmapIndexProbe *pop = GPOS_NEW(mp) CScalarBitmapIndexProbe(
+			mp, pindexdesc, ptabdesc, pmdindex->GetIndexRetItemTypeMdid());
+		if (!CHintUtils::SatisfiesPlanHints(
+				pop,
+				COptCtxt::PoctxtFromTLS()->GetOptimizerConfig()->GetPlanHint()))
+		{
+			pop->Release();
+			pexprIndexFinal->Release();
+			(*ppexprRecheck)->Release();
+			return nullptr;
+		}
+		return GPOS_NEW(mp) CExpression(mp, pop, pexprIndexFinal);
 	}
 
 	// else the unmatched predicate becomes the residual
@@ -3318,6 +3389,7 @@ CXformUtils::FHasAmbiguousType(CExpression *pexpr, CMDAccessor *md_accessor)
 			case COperator::EopScalarProjectList:
 			case COperator::EopScalarProjectElement:
 			case COperator::EopScalarSwitchCase:
+			case COperator::EopScalarArrayRefIndexList:
 				break;	// these operators do not have valid return type
 
 			default:
@@ -3363,7 +3435,11 @@ CXformUtils::PexprSelect2BitmapBoolOp(CMemoryPool *mp, CExpression *pexpr)
 	CExpression *pexprScalar = (*pexpr)[1];
 	CLogical *popGet = CLogical::PopConvert(pexprRelational->Pop());
 
-	CTableDescriptor *ptabdesc = pexprRelational->DeriveTableDescriptor();
+	CTableDescriptorHashSet *ptabdescset =
+		pexprRelational->DeriveTableDescriptor();
+	GPOS_ASSERT(1 == ptabdescset->Size());
+	CTableDescriptor *ptabdesc = ptabdescset->First();
+
 	GPOS_ASSERT(nullptr != ptabdesc);
 	const ULONG ulIndices = ptabdesc->IndexCount();
 	if (0 == ulIndices)

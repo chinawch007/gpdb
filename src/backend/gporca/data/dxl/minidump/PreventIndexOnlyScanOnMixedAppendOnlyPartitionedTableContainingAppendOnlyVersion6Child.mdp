@@ -34,6 +34,7 @@
         </dxl:CostParams>
       </dxl:CostModelConfig>
       <dxl:Hint JoinArityForAssociativityCommutativity="18" ArrayExpansionThreshold="20" JoinOrderDynamicProgThreshold="10" BroadcastThreshold="100000" EnforceConstraintsOnDML="false" PushGroupByBelowSetopThreshold="10" XformBindThreshold="0" SkewFactor="0"/>
+      <dxl:PlanHint/>
       <dxl:TraceFlags Value="102001,102002,102003,102043,102074,102120,102144,102162,102163,103001,103014,103022,103026,103027,103029,103033,103038,103040,104002,104003,104004,104005,105000,106000"/>
     </dxl:OptimizerConfig>
     <dxl:Metadata SystemIds="0.GPDB">
@@ -80,7 +81,7 @@
         </dxl:PartConstraint>
       </dxl:Relation>
       <dxl:RelationStatistics Mdid="2.172082.1.0" Name="mypt" Rows="300.000000" RelPages="5" RelAllVisible="3" EmptyRelation="false"/>
-      <dxl:Relation Mdid="6.172082.1.0" Name="mypt" IsTemporary="false" StorageType="MixedPartitioned" AppendOnlyVersion="1" DistributionPolicy="Hash" DistributionColumns="0" Keys="6,7,1" PartitionColumns="0" PartitionTypes="r">
+      <dxl:Relation Mdid="6.172082.1.0" Name="mypt" IsTemporary="false" Rows="300.000000" StorageType="MixedPartitioned" AppendOnlyVersion="1" DistributionPolicy="Hash" DistributionColumns="0" Keys="6,7,1" PartitionColumns="0" PartitionTypes="r">
         <dxl:Columns>
           <dxl:Column Name="a" Attno="1" Mdid="0.20.1.0" Nullable="true" ColWidth="8">
           </dxl:Column>
@@ -805,7 +806,7 @@
     <dxl:Plan Id="0" SpaceSize="2">
       <dxl:GatherMotion InputSegments="0,1,2" OutputSegments="-1">
         <dxl:Properties>
-          <dxl:Cost StartupCost="0" TotalCost="387.966697" Rows="1.006711" Width="8"/>
+          <dxl:Cost StartupCost="0" TotalCost="387.966697" Rows="1.000000" Width="8"/>
         </dxl:Properties>
         <dxl:ProjList>
           <dxl:ProjElem ColId="0" Alias="a">
@@ -816,7 +817,7 @@
         <dxl:SortingColumnList/>
         <dxl:DynamicBitmapTableScan SelectorIds="">
           <dxl:Properties>
-            <dxl:Cost StartupCost="0" TotalCost="387.966667" Rows="1.006711" Width="8"/>
+            <dxl:Cost StartupCost="0" TotalCost="387.966667" Rows="1.000000" Width="8"/>
           </dxl:Properties>
           <dxl:ProjList>
             <dxl:ProjElem ColId="0" Alias="a">

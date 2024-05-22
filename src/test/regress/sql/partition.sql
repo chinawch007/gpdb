@@ -1,3 +1,10 @@
+-- start_matchsubs
+-- m/\(cost=.*\)/
+-- s/\(cost=.*\)//
+--
+-- m/\(slice\d+; segments: \d+\)/
+-- s/\(slice\d+; segments: \d+\)//
+-- end_matchsubs
 
 drop table if exists d;
 drop table if exists c;
@@ -4174,3 +4181,74 @@ ALTER TABLE public.logs_issue_16558 SET SUBPARTITION TEMPLATE
 SELECT level, pg_get_expr(template, relid, true) FROM gp_partition_template WHERE relid = 'public.logs_issue_16558'::regclass ORDER BY 1 DESC;
 DROP TABLE public.logs_issue_16558;
 
+-- We should not allow subpartition by clause when creating empty partition hierarchy
+-- Should error out
+CREATE TABLE empty_partition_disallow_subpartition(i int, j int)
+PARTITION BY range(i) SUBPARTITION BY range(j);
+
+-- Check with other Partition syntax
+CREATE TABLE empty_partition_disallow_subpartition_2(i int, j int)
+    DISTRIBUTED BY (i) PARTITION BY range(i) SUBPARTITION BY range(j);
+
+-- Should work fine for empty hierarchy when subpartition is not specified
+CREATE TABLE empty_partition(i int, j int) PARTITION BY range(i);
+
+-- Check with other Partition syntax
+CREATE TABLE empty_partition2(i int, j int) DISTRIBUTED BY (i) PARTITION BY range(i);
+
+-- test guc gp_max_partition_level
+drop table p3_sales;
+set gp_max_partition_level = 2;
+CREATE TABLE p3_sales (id int, year int, month int, day int,
+region text)
+DISTRIBUTED BY (id)
+PARTITION BY RANGE (year)
+ SUBPARTITION BY RANGE (month)
+  SUBPARTITION TEMPLATE (
+    START (1) END (3) EVERY (1),
+    DEFAULT SUBPARTITION other_months )
+    SUBPARTITION BY LIST (region)
+      SUBPARTITION TEMPLATE (
+       SUBPARTITION usa VALUES ('usa'),
+       SUBPARTITION europe VALUES ('europe'),
+       DEFAULT SUBPARTITION other_regions )
+( START (2010) END (2012) EVERY (1),
+  DEFAULT PARTITION outlying_years );
+
+set gp_max_partition_level = 3;
+CREATE TABLE p3_sales (id int, year int, month int, day int,
+region text)
+DISTRIBUTED BY (id)
+PARTITION BY RANGE (year)
+ SUBPARTITION BY RANGE (month)
+  SUBPARTITION TEMPLATE (
+    START (1) END (3) EVERY (1),
+    DEFAULT SUBPARTITION other_months )
+    SUBPARTITION BY LIST (region)
+      SUBPARTITION TEMPLATE (
+       SUBPARTITION usa VALUES ('usa'),
+       SUBPARTITION europe VALUES ('europe'),
+       DEFAULT SUBPARTITION other_regions )
+( START (2010) END (2012) EVERY (1),
+  DEFAULT PARTITION outlying_years );
+
+drop table p3_sales;
+
+set gp_max_partition_level = 0;
+CREATE TABLE p3_sales (id int, year int, month int, day int,
+region text)
+DISTRIBUTED BY (id)
+PARTITION BY RANGE (year)
+ SUBPARTITION BY RANGE (month)
+  SUBPARTITION TEMPLATE (
+    START (1) END (3) EVERY (1),
+    DEFAULT SUBPARTITION other_months )
+    SUBPARTITION BY LIST (region)
+      SUBPARTITION TEMPLATE (
+       SUBPARTITION usa VALUES ('usa'),
+       SUBPARTITION europe VALUES ('europe'),
+       DEFAULT SUBPARTITION other_regions )
+( START (2010) END (2012) EVERY (1),
+  DEFAULT PARTITION outlying_years );
+
+drop table p3_sales;

@@ -559,9 +559,6 @@ public:
 	// check if a given operator is a physical join
 	static BOOL FPhysicalJoin(COperator *pop);
 
-	// check if a given operator is a physical left outer join
-	static BOOL FPhysicalLeftOuterJoin(COperator *pop);
-
 	// check if a given operator is a physical scan
 	static BOOL FPhysicalScan(COperator *pop);
 
@@ -1021,6 +1018,9 @@ public:
 	static BOOL FScalarConstOrBinaryCoercible(CExpression *pexpr);
 
 	static BOOL FScalarIdentNullTest(CExpression *pexpr);
+
+	static CTableDescriptorHashSet *RemoveDuplicateMdids(
+		CMemoryPool *mp, CTableDescriptorHashSet *tabdescs);
 };	// class CUtils
 
 // hash set from expressions

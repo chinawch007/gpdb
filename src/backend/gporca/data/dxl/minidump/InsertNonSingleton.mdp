@@ -35,6 +35,7 @@ EXPLAIN INSERT INTO snackbox SELECT a FROM (SELECT c FROM hottoast LIMIT 3) hott
         </dxl:CostParams>
       </dxl:CostModelConfig>
       <dxl:Hint JoinArityForAssociativityCommutativity="18" ArrayExpansionThreshold="100" JoinOrderDynamicProgThreshold="10" BroadcastThreshold="100000" EnforceConstraintsOnDML="false" PushGroupByBelowSetopThreshold="10"/>
+      <dxl:PlanHint/>
       <dxl:TraceFlags Value="102001,102002,102003,102073,102074,102120,102144,103014,103022,103027,103029,103033,103038,104002,104003,104004,104005,105000,106000"/>
     </dxl:OptimizerConfig>
     <dxl:Metadata SystemIds="0.GPDB">
@@ -156,7 +157,7 @@ EXPLAIN INSERT INTO snackbox SELECT a FROM (SELECT c FROM hottoast LIMIT 3) hott
         <dxl:CountAgg Mdid="0.2147.1.0"/>
       </dxl:Type>
       <dxl:RelationStatistics Mdid="2.16431.1.0" Name="hottoast" Rows="0.000000" EmptyRelation="true"/>
-      <dxl:Relation Mdid="6.16431.1.0" Name="hottoast" IsTemporary="false" StorageType="Heap" DistributionPolicy="Replicated" Keys="7,1">
+      <dxl:Relation Mdid="6.16431.1.0" Name="hottoast" IsTemporary="false" Rows="0.000000" StorageType="Heap" DistributionPolicy="Replicated" Keys="7,1">
         <dxl:Columns>
           <dxl:Column Name="c" Attno="1" Mdid="0.23.1.0" Nullable="true" ColWidth="4">
           </dxl:Column>
@@ -179,7 +180,7 @@ EXPLAIN INSERT INTO snackbox SELECT a FROM (SELECT c FROM hottoast LIMIT 3) hott
         <dxl:CheckConstraints/>
       </dxl:Relation>
       <dxl:RelationStatistics Mdid="2.16428.1.0" Name="snackbox" Rows="0.000000" EmptyRelation="true"/>
-      <dxl:Relation Mdid="6.16428.1.0" Name="snackbox" IsTemporary="false" StorageType="Heap" DistributionPolicy="Replicated" Keys="7,1">
+      <dxl:Relation Mdid="6.16428.1.0" Name="snackbox" IsTemporary="false" Rows="0.000000" StorageType="Heap" DistributionPolicy="Replicated" Keys="7,1">
         <dxl:Columns>
           <dxl:Column Name="a" Attno="1" Mdid="0.23.1.0" Nullable="true" ColWidth="4">
           </dxl:Column>

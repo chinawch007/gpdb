@@ -1,6 +1,13 @@
 --
 -- ORCA tests
 --
+-- start_matchsubs
+-- m/\(cost=.*\)/
+-- s/\(cost=.*\)//
+--
+-- m/\(slice\d+; segments: \d+\)/
+-- s/\(slice\d+; segments: \d+\)//
+-- end_matchsubs
 
 -- show version
 SELECT count(*) from gp_opt_version();
@@ -1544,7 +1551,7 @@ alter table orca.bm_dyn_test drop column to_be_dropped;
 alter table orca.bm_dyn_test add partition part5 values(5);
 insert into orca.bm_dyn_test values(2, 5, '2');
 
-set optimizer_enable_bitmapscan=on;
+set optimizer_enable_dynamicbitmapscan=on;
 -- start_ignore
 analyze orca.bm_dyn_test;
 -- end_ignore
@@ -2539,6 +2546,7 @@ EXPLAIN SELECT a, b FROM btab_old_hash LEFT OUTER JOIN atab_old_hash ON a |=| b;
 SELECT a, b FROM btab_old_hash LEFT OUTER JOIN atab_old_hash ON a |=| b;
 
 set optimizer_expand_fulljoin = on;
+select disable_xform('CXformFullOuterJoin2HashJoin');
 EXPLAIN SELECT a, b FROM atab_old_hash FULL JOIN btab_old_hash ON a |=| b;
 SELECT a, b FROM atab_old_hash FULL JOIN btab_old_hash ON a |=| b;
 reset optimizer_expand_fulljoin;
@@ -2900,6 +2908,12 @@ analyze roj2;
 set optimizer_enable_motion_redistribute=off;
 select count(*), t2.c from roj1 t1 left join roj2 t2 on t1.a = t2.c group by t2.c;
 explain (costs off) select count(*), t2.c from roj1 t1 left join roj2 t2 on t1.a = t2.c group by t2.c;
+
+-- check that ROJ can be disabled via GUC
+set optimizer_enable_right_outer_join=off;
+explain (costs off) select count(*), t2.c from roj1 t1 left join roj2 t2 on t1.a = t2.c group by t2.c;
+reset optimizer_enable_right_outer_join;
+
 reset optimizer_enable_motion_redistribute;
 
 reset enable_sort;
@@ -3017,6 +3031,7 @@ default partition def);
 create INDEX y_idx on y (j);
 
 set optimizer_enable_indexjoin=on;
+set optimizer_enable_dynamicindexscan=on;
 explain (costs off) select count(*) from x, y where (x.i > y.j AND x.j <= y.i);
 reset optimizer_enable_indexjoin;
 
@@ -3608,7 +3623,90 @@ INSERT INTO array_coerceviaio values(ARRAY[1, 2, 3]);
 
 EXPLAIN SELECT CAST(a AS TEXT[]) FROM array_coerceviaio;
 SELECT CAST(a AS TEXT[]) FROM array_coerceviaio;
+
 ---------------------------------------------------------------------------------
+DROP TABLE IF EXISTS schema_test_table;
+CREATE TABLE schema_test_table(a numeric, b numeric(5,2), c char(10) NOT NULL) distributed by (a);
+-- In 7x, redundant Result nodes in planned_stmt are being removed by ORCA,
+-- which caused the loss of typmod info of column type in plan.
+-- Below query is used by external libraries to fetch schema of table.
+-- Test that the typmod of column type is correct in explain plan.
+EXPLAIN (VERBOSE, COSTS OFF) SELECT * FROM schema_test_table WHERE 1=0;
+---------------------------------------------------------------------------------
+
+---------------------------------------------------------------------------------
+-- Test ALL NULL scalar array compare 
+create table DatumSortedSet_core (a int, b character varying NOT NULL) distributed by (a);
+explain select * from DatumSortedSet_core where b in (NULL, NULL);
+---------------------------------------------------------------------------------
+
+-- Test fill argtypes of PopAggFunc
+-- start_ignore
+drop table if exists foo;
+drop table if exists bar;
+-- end_ignore
+
+set optimizer_enable_eageragg = on;
+create table foo (j1 int, g1 int, s1 int);
+insert into foo select i%10, i %10, i from generate_series(1,100) i;
+create table bar (j2 int, g2 int, s2 int);
+insert into bar select i%1, i %10, i from generate_series(1,10) i;
+analyze foo;
+analyze bar;
+
+explain (costs off) select max(s1) from foo inner join bar on j1 = j2 group by g1;
+drop table foo;
+drop table bar;
+reset optimizer_enable_eageragg;
+
+-- Testcases to validate the behavior of the GUC gp_max_system_slices
+
+-- start_ignore
+drop table if exists foo;
+drop table if exists bar;
+-- end_ignore
+
+create table foo (a int, b int) distributed by(a);
+create table bar (a int, b int) distributed by(a);
+
+-- gp_max_slices : 0 (unlimited) and gp_max_system_slices : 0 (unlimited)
+explain (costs off) select foo.a, foo.b from foo, bar where foo.b=bar.b;
+
+-- gp_max_slices : 1 and gp_max_system_slices : 0 (unlimited)
+-- Query should generate an error because the number of slices in the query exceeds the gp_max_slices
+set gp_max_slices=1;
+explain (costs off) select foo.a, foo.b from foo, bar where foo.b=bar.b;
+
+-- gp_max_slices : 0 (unlimited) and gp_max_system_slices : 1
+-- Query should generate an error because the number of slices in the query exceeds the gp_max_system_slices
+set gp_max_system_slices=1;
+reset gp_max_slices;
+explain (costs off) select foo.a, foo.b from foo, bar where foo.b=bar.b;
+reset gp_max_system_slices;
+
+-- Ensure that a regular user cannot set the GUC gp_max_system_slices
+create user ruser;
+set session authorization ruser;
+set gp_max_system_slices=10;
+reset session authorization;
+
+-- Test that set returning function with multiple columns works with explain
+CREATE FUNCTION srf_attnum() RETURNS TABLE(v1 int, v2 int)
+    LANGUAGE plpgsql NO SQL
+    AS $_$
+BEGIN
+    DROP TABLE IF EXISTS tbl_2_cols;
+    CREATE TEMP TABLE tbl_2_cols (col1 int, col2 int) DISTRIBUTED RANDOMLY;
+    RETURN QUERY SELECT * from tbl_2_cols;
+END;
+$_$;
+explain select distinct v1 from srf_attnum();
+select distinct v1 from srf_attnum();
+explain select distinct v2 from srf_attnum();
+select distinct v2 from srf_attnum();
+
+drop user ruser;
+drop table foo, bar;
 
 -- start_ignore
 DROP SCHEMA orca CASCADE;

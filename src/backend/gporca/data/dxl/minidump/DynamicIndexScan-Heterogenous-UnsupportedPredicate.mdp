@@ -11,6 +11,7 @@
           <dxl:CostParam Name="NLJFactor" Value="1.000000" LowerBound="0.500000" UpperBound="1.500000"/>
         </dxl:CostParams>
       </dxl:CostModelConfig>
+      <dxl:PlanHint/>
       <dxl:TraceFlags Value="101013,102001,102002,102003,102024,102025,102115,102116,102117,102119,102121,102144,103001,103014,103015,103026,103027,103033"/>
     </dxl:OptimizerConfig>
     <dxl:Metadata SystemIds="0.GPDB">
@@ -264,7 +265,7 @@
       <dxl:ColumnStatistics Mdid="1.1637610.1.1.5" Name="c6" Width="8.000000" NullFreq="0.000000" NdvRemain="0.000000" FreqRemain="0.000000"/>
       <dxl:ColumnStatistics Mdid="1.1637610.1.1.4" Name="c5" Width="8.000000" NullFreq="0.000000" NdvRemain="0.000000" FreqRemain="0.000000"/>
       <dxl:RelationStatistics Mdid="2.1637610.1.1" Name="heapaoco_list_part" Rows="0.000000" EmptyRelation="true"/>
-      <dxl:Relation Mdid="6.1637610.1.0" Name="heapaoco_list_part" IsTemporary="false" StorageType="Heap" DistributionPolicy="Hash" DistributionColumns="0" Keys="12,13,7" PartitionColumns="0" PartitionTypes="l">
+      <dxl:Relation Mdid="6.1637610.1.0" Name="heapaoco_list_part" IsTemporary="false" Rows="0.000000" StorageType="Heap" DistributionPolicy="Hash" DistributionColumns="0" Keys="12,13,7" PartitionColumns="0" PartitionTypes="l">
         <dxl:Columns>
           <dxl:Column Name="c1" Attno="1" Mdid="0.23.1.0" Nullable="true" ColWidth="4">
           </dxl:Column>
@@ -409,7 +410,7 @@
           </dxl:Or>
         </dxl:PartConstraint>
       </dxl:Relation>
-      <dxl:Relation Mdid="6.1637610.1.1" Name="heapaoco_list_part" IsTemporary="false" StorageType="Heap" DistributionPolicy="Hash" DistributionColumns="0" Keys="12,13,7" PartitionColumns="0" PartitionTypes="l">
+      <dxl:Relation Mdid="6.1637610.1.1" Name="heapaoco_list_part" IsTemporary="false" Rows="0.000000" StorageType="Heap" DistributionPolicy="Hash" DistributionColumns="0" Keys="12,13,7" PartitionColumns="0" PartitionTypes="l">
         <dxl:Columns>
           <dxl:Column Name="c1" Attno="1" Mdid="0.23.1.0" Nullable="true" ColWidth="4">
           </dxl:Column>

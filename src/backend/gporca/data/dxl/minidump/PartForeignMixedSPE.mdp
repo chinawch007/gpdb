@@ -37,6 +37,7 @@ alter table part attach partition p4 for values from (30) to (40);
         </dxl:CostParams>
       </dxl:CostModelConfig>
       <dxl:Hint JoinArityForAssociativityCommutativity="18" ArrayExpansionThreshold="20" JoinOrderDynamicProgThreshold="10" BroadcastThreshold="100000" EnforceConstraintsOnDML="false" PushGroupByBelowSetopThreshold="10" XformBindThreshold="0" SkewFactor="0"/>
+      <dxl:PlanHint/>
       <dxl:TraceFlags Value="102001,102002,102003,102043,102074,102120,102144,103001,103014,103022,103026,103027,103029,103033,103038,103040,104002,104003,104004,104005,105000,106000"/>
     </dxl:OptimizerConfig>
     <dxl:Metadata SystemIds="0.GPDB">
@@ -318,7 +319,7 @@ alter table part attach partition p4 for values from (30) to (40);
         <dxl:CountAgg Mdid="0.2147.1.0"/>
       </dxl:Type>
       <dxl:RelationStatistics Mdid="2.32925.1.0" Name="part" Rows="2000000.000000" RelPages="0" RelAllVisible="0" EmptyRelation="false"/>
-      <dxl:Relation Mdid="6.32925.1.0" Name="part" IsTemporary="false" StorageType="Heap" DistributionPolicy="Hash" DistributionColumns="0" Keys="7,8,2" PartitionColumns="1" PartitionTypes="r" ConvertHashToRandom="true">
+      <dxl:Relation Mdid="6.32925.1.0" Name="part" IsTemporary="false" Rows="2000000.000000" StorageType="Heap" DistributionPolicy="Hash" DistributionColumns="0" Keys="7,8,2" PartitionColumns="1" PartitionTypes="r" ConvertHashToRandom="true">
         <dxl:Columns>
           <dxl:Column Name="a" Attno="1" Mdid="0.23.1.0" Nullable="true" ColWidth="4">
           </dxl:Column>
@@ -428,7 +429,7 @@ alter table part attach partition p4 for values from (30) to (40);
     <dxl:Plan Id="0" SpaceSize="2">
       <dxl:GatherMotion InputSegments="0,1,2" OutputSegments="-1">
         <dxl:Properties>
-          <dxl:Cost StartupCost="0" TotalCost="906.301393" Rows="2.000000" Width="8"/>
+          <dxl:Cost StartupCost="0" TotalCost="885.853707" Rows="2.000000" Width="8"/>
         </dxl:Properties>
         <dxl:ProjList>
           <dxl:ProjElem ColId="0" Alias="a">
@@ -442,7 +443,7 @@ alter table part attach partition p4 for values from (30) to (40);
         <dxl:SortingColumnList/>
         <dxl:Result>
           <dxl:Properties>
-            <dxl:Cost StartupCost="0" TotalCost="906.301333" Rows="2.000000" Width="8"/>
+            <dxl:Cost StartupCost="0" TotalCost="885.853647" Rows="2.000000" Width="8"/>
           </dxl:Properties>
           <dxl:ProjList>
             <dxl:ProjElem ColId="0" Alias="a">
@@ -467,7 +468,7 @@ alter table part attach partition p4 for values from (30) to (40);
           <dxl:OneTimeFilter/>
           <dxl:Append IsTarget="false" IsZapped="false">
             <dxl:Properties>
-              <dxl:Cost StartupCost="0" TotalCost="897.528000" Rows="800000.000000" Width="8"/>
+              <dxl:Cost StartupCost="0" TotalCost="885.853471" Rows="16.000000" Width="8"/>
             </dxl:Properties>
             <dxl:ProjList>
               <dxl:ProjElem ColId="0" Alias="a">
@@ -480,7 +481,7 @@ alter table part attach partition p4 for values from (30) to (40);
             <dxl:Filter/>
             <dxl:DynamicTableScan SelectorIds="">
               <dxl:Properties>
-                <dxl:Cost StartupCost="0" TotalCost="436.573333" Rows="800000.000000" Width="8"/>
+                <dxl:Cost StartupCost="0" TotalCost="431.000056" Rows="8.000000" Width="8"/>
               </dxl:Properties>
               <dxl:ProjList>
                 <dxl:ProjElem ColId="9" Alias="a">

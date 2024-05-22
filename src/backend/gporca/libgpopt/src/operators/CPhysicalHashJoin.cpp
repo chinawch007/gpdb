@@ -14,6 +14,7 @@
 #include "gpos/base.h"
 
 #include "gpopt/base/CCastUtils.h"
+#include "gpopt/base/CColRefSetIter.h"
 #include "gpopt/base/CDistributionSpecHashed.h"
 #include "gpopt/base/CDistributionSpecNonReplicated.h"
 #include "gpopt/base/CDistributionSpecNonSingleton.h"
@@ -255,19 +256,24 @@ CPhysicalHashJoin::PdsMatch(CMemoryPool *mp, CDistributionSpec *pds,
 	{
 		case CDistributionSpec::EdtUniversal:
 			// One child is universal
-			// If the join outputs the universal side, request the other child
-			// to be a singleton. This way the join output ends up on one segment
-			// or the coordinator, so the data isn't duplicated. This can happen
-			// in outer and anti semi joins.
-			// If the join doesn't output the universal side, request the other
-			// child to be non duplicated, i.e. non-replicated. This is the case
-			// with inner and semi joins.
+			//
+			// If the outer child is universal (join outputs all tuples from the universal
+			// side with or without match in the other child), request the other child to
+			// be a singleton. This way the join occurs on one segment or the coordinator,
+			// eliminating the duplicate risk. This can happen in outer, anti semi and
+			// full joins. Note, full join has two outer children (both left and right).
+			//
+			// If the inner child is universal (join only outputs tuples from the universal
+			// side in case of a match in the other child), request the other child to
+			// be non duplicated, i.e. non-replicated. This is the case with inner and semi
+			// joins.
 
 			if ((EceoRightToLeft == eceo &&
 				 EopPhysicalRightOuterHashJoin == this->Eopid()) ||
 				(EceoLeftToRight == eceo &&
 				 (EopPhysicalLeftOuterHashJoin == this->Eopid() ||
-				  EopPhysicalLeftAntiSemiHashJoin == this->Eopid())))
+				  EopPhysicalLeftAntiSemiHashJoin == this->Eopid())) ||
+				EopPhysicalFullHashJoin == this->Eopid())
 			{
 				return GPOS_NEW(mp) CDistributionSpecSingleton();
 			}
@@ -292,6 +298,15 @@ CPhysicalHashJoin::PdsMatch(CMemoryPool *mp, CDistributionSpec *pds,
 			GPOS_ASSERT(CDistributionSpec::EdtStrictReplicated == pds->Edt() ||
 						CDistributionSpec::EdtTaintedReplicated == pds->Edt());
 
+			// Full join has two outer children (full join outputs all the tuples of either
+			// child with or without match in the other child), if one child is replicated,
+			// we request the other child to be replicated as well.
+			if (EopPhysicalFullHashJoin == this->Eopid())
+			{
+				return GPOS_NEW(mp) CDistributionSpecReplicated(
+					CDistributionSpec::EdtStrictReplicated);
+			}
+
 			if (EceoRightToLeft == eceo)
 			{
 				GPOS_ASSERT(1 == ulSourceChildIndex);
@@ -314,6 +329,219 @@ CPhysicalHashJoin::PdsMatch(CMemoryPool *mp, CDistributionSpec *pds,
 	}
 }
 
+//---------------------------------------------------------------------------
+//	@function:
+//		FIdenticalExpression
+//
+//	@doc:
+//		Check whether the expressions match based on column name, instead of
+//		column identifier. This is to accommodate the case of self-joins where
+//		column names match, but the column identifier may not.
+//---------------------------------------------------------------------------
+static BOOL
+FIdenticalExpression(CExpression *left, CExpression *right)
+{
+	if (left->Pop()->Eopid() == COperator::EopScalarIdent &&
+		right->Pop()->Eopid() == COperator::EopScalarIdent)
+	{
+		// skip colid check. just make sure that names are same.
+		return CWStringConst::Equals(
+			CScalarIdent::PopConvert(left->Pop())->Pcr()->Name().Pstr(),
+			CScalarIdent::PopConvert(right->Pop())->Pcr()->Name().Pstr());
+	}
+	else if (!left->Pop()->Matches(right->Pop()) ||
+			 left->Arity() != right->Arity())
+	{
+		return false;
+	}
+	else
+	{
+		for (ULONG ul = 0; ul < left->Arity(); ul++)
+		{
+			if (!FIdenticalExpression((*left)[ul], (*right)[ul]))
+			{
+				return false;
+			}
+		}
+		return true;
+	}
+}
+
+//---------------------------------------------------------------------------
+//	@function:
+//		FIdenticalExpressionArrays
+//
+//	@doc:
+//		Check whether the expressions in input arrays match, *not* including
+//		colid.
+//---------------------------------------------------------------------------
+static BOOL
+FIdenticalExpressionArrays(const CExpressionArray *outer,
+						   const CExpressionArray *inner)
+{
+	GPOS_ASSERT(outer->Size() == inner->Size());
+
+	for (ULONG ul = 0; ul < outer->Size(); ul++)
+	{
+		if (!FIdenticalExpression((*outer)[ul], (*inner)[ul]))
+		{
+			return false;
+		}
+	}
+	return true;
+}
+
+BOOL
+CPhysicalHashJoin::FSelfJoinWithMatchingJoinKeys(
+	CMemoryPool *mp, CExpressionHandle &exprhdl) const
+{
+	// There may be duplicate mdids because the hash key is unique on a
+	// combination of mdid and alias. Here we do not care about duplicate
+	// aliases because joining the same table with different alias is still a
+	// self-join.
+	CTableDescriptorHashSet *outertabs = CUtils::RemoveDuplicateMdids(
+		mp, exprhdl.DeriveTableDescriptor(0 /*child_index*/));
+	CTableDescriptorHashSet *innertabs = CUtils::RemoveDuplicateMdids(
+		mp, exprhdl.DeriveTableDescriptor(1 /*child_index*/));
+
+	BOOL result = false;
+
+	// Check that this is a self join. Size() of 1 means that there is 1 unique
+	// table on each side of the join. Check whether it is the same table.
+	if (outertabs->Size() == 1 && innertabs->Size() == 1 &&
+		outertabs->First()->MDId()->Equals(innertabs->First()->MDId()))
+	{
+		// Check that the join keys are identical
+		if (FIdenticalExpressionArrays(PdrgpexprInnerKeys(),
+									   PdrgpexprOuterKeys()))
+		{
+			result = true;
+		}
+	}
+	outertabs->Release();
+	innertabs->Release();
+
+	return result;
+}
+
+
+//---------------------------------------------------------------------------
+//	@function:
+//		CPhysicalHashJoin::PdsDeriveFromHashedChildren
+//
+//	@doc:
+//		Derive hash join distribution from hashed children;
+//		return NULL if derivation failed
+//
+//---------------------------------------------------------------------------
+CDistributionSpec *
+CPhysicalHashJoin::PdsDeriveFromHashedChildren(
+	CMemoryPool *mp, CExpressionHandle &exprhdl, CDistributionSpec *pdsOuter,
+	CDistributionSpec *pdsInner) const
+{
+	GPOS_ASSERT(nullptr != pdsOuter);
+	GPOS_ASSERT(nullptr != pdsInner);
+
+	CDistributionSpecHashed *pdshashedOuter =
+		CDistributionSpecHashed::PdsConvert(pdsOuter);
+	CDistributionSpecHashed *pdshashedInner =
+		CDistributionSpecHashed::PdsConvert(pdsInner);
+
+	if (FSelfJoinWithMatchingJoinKeys(mp, exprhdl))
+	{
+		// A self join on distributed spec columns will preserve the colocated
+		// nulls.
+		CDistributionSpecHashed *combined_hashed_spec =
+			pdshashedOuter->Combine(mp, pdshashedInner);
+		return combined_hashed_spec;
+	}
+
+	if (pdshashedOuter->IsCoveredBy(PdrgpexprOuterKeys()) &&
+		pdshashedInner->IsCoveredBy(PdrgpexprInnerKeys()))
+	{
+		// if both sides are hashed on subsets of hash join keys, join's output can be
+		// seen as distributed on outer spec or (equivalently) on inner spec,
+		// so create a new spec and mark outer and inner as equivalent
+
+		CDistributionSpecHashed *pdshashedInnerCopy =
+			pdshashedInner->Copy(mp, false);
+		CDistributionSpecHashed *combined_hashed_spec =
+			pdshashedOuter->Combine(mp, pdshashedInnerCopy);
+		pdshashedInnerCopy->Release();
+		return combined_hashed_spec;
+	}
+
+	return nullptr;
+}
+
+CDistributionSpec *
+CPhysicalHashJoin::PdsDeriveForOuterJoin(CMemoryPool *mp,
+										 CExpressionHandle &exprhdl) const
+{
+	GPOS_ASSERT(EopPhysicalLeftOuterHashJoin == Eopid() ||
+				EopPhysicalRightOuterHashJoin == Eopid());
+
+	CDistributionSpec *pdsOuter = exprhdl.Pdpplan(0 /*child_index*/)->Pds();
+	CDistributionSpec *pdsInner = exprhdl.Pdpplan(1 /*child_index*/)->Pds();
+
+	// We must use the non-nullable side for the distribution spec for outer joins.
+	// For right join, the hash side is the non-nullable side, so we swap the inner/outer
+	// distribution specs for the logic below
+	if (exprhdl.Pop()->Eopid() == EopPhysicalRightOuterHashJoin)
+	{
+		pdsOuter = exprhdl.Pdpplan(1 /*child_index*/)->Pds();
+		pdsInner = exprhdl.Pdpplan(0 /*child_index*/)->Pds();
+	}
+
+	if (CDistributionSpec::EdtHashed == pdsOuter->Edt() &&
+		CDistributionSpec::EdtHashed == pdsInner->Edt())
+	{
+		CDistributionSpec *pdsDerived =
+			PdsDeriveFromHashedChildren(mp, exprhdl, pdsOuter, pdsInner);
+		if (nullptr != pdsDerived)
+		{
+			return pdsDerived;
+		}
+	}
+
+	CDistributionSpec *pds;
+	if (CDistributionSpec::EdtStrictReplicated == pdsOuter->Edt() ||
+		CDistributionSpec::EdtUniversal == pdsOuter->Edt())
+	{
+		// if outer is replicated/universal, return inner distribution
+		pds = pdsInner;
+	}
+	else
+	{
+		// otherwise, return outer distribution
+		pds = pdsOuter;
+	}
+
+	if (CDistributionSpec::EdtHashed == pds->Edt())
+	{
+		CDistributionSpecHashed *pdsHashed =
+			CDistributionSpecHashed::PdsConvert(pds);
+
+		// Clean up any incomplete distribution specs since they can no longer be completed above
+		// Note that, since this is done at the lowest join, no relevant equivalent specs are lost.
+		if (!pdsHashed->HasCompleteEquivSpec(mp))
+		{
+			CExpressionArray *pdrgpexpr = pdsHashed->Pdrgpexpr();
+			IMdIdArray *opfamilies = pdsHashed->Opfamilies();
+
+			if (nullptr != opfamilies)
+			{
+				opfamilies->AddRef();
+			}
+			pdrgpexpr->AddRef();
+			return GPOS_NEW(mp) CDistributionSpecHashed(
+				pdrgpexpr, pdsHashed->FNullsColocated(), opfamilies);
+		}
+	}
+
+	pds->AddRef();
+	return pds;
+}
 
 //---------------------------------------------------------------------------
 //	@function:
@@ -414,12 +642,20 @@ CPhysicalHashJoin::PdshashedMatching(
 			GPOS_WSZ_LIT("Unable to create matching hashed distribution."));
 	}
 
-	// nulls colocated for inner hash joins, but not colocated in outer hash joins
+	// As of now, we cannot set nulls colocation to false for inner joins, because
+	// this logic is used by PdsDeriveFromHashedOuter and PdsDeriveFromReplicatedOuter,
+	// where the property delivered by the inner relation is calculated based on the
+	// property delivered by the outer relation in inner joins.
+	//
+	// For outer joins, this logic is only used for distribution requests, where we
+	// can safely waive the request for nulls colocation, as far as the join condition
+	// isn't null aware (not district from).
 	BOOL fNullsColocated = true;
 
 	if (!m_is_null_aware &&
 		(COperator::EopPhysicalLeftOuterHashJoin == Eopid() ||
-		 COperator::EopPhysicalRightOuterHashJoin == Eopid()))
+		 COperator::EopPhysicalRightOuterHashJoin == Eopid() ||
+		 COperator::EopPhysicalFullHashJoin == Eopid()))
 	{
 		fNullsColocated = false;
 	}
@@ -479,7 +715,7 @@ CPhysicalHashJoin::PdsRequiredSingleton(CMemoryPool *mp,
 	GPOS_ASSERT(CDistributionSpec::EdtSingleton == pdsFirst->Edt() ||
 				CDistributionSpec::EdtStrictSingleton == pdsFirst->Edt());
 
-	// require second child to have matching singleton distribution
+	// require second child to have matching singleton distribution (coordinator or segment)
 	return CPhysical::PdssMatching(
 		mp, CDistributionSpecSingleton::PdssConvert(pdsFirst));
 }
@@ -820,6 +1056,56 @@ CPhysicalHashJoin::Ped(CMemoryPool *mp, CExpressionHandle &exprhdl,
 		dmatch);
 }
 
+//---------------------------------------------------------------------------
+//	@function:
+//		CPhysicalHashJoin::PedRightOrFullJoin
+//
+//	@doc:
+//		Compute required distribution of the n-th child
+//		for right outer join and full outer join
+//
+//---------------------------------------------------------------------------
+CEnfdDistribution *
+CPhysicalHashJoin::PedRightOrFullJoin(
+	CMemoryPool *mp, CExpressionHandle &exprhdl, CReqdPropPlan *prppInput,
+	ULONG child_index, CDrvdPropArray *pdrgpdpCtxt, ULONG ulOptReq)
+{
+	// create the following requests:
+	// 1) hash-hash (provided by CPhysicalHashJoin::Ped)
+	// 2) singleton-singleton
+	//
+	// We also could create a replicated-hashed and replicated-non-singleton
+	// request, but that isn't a promising alternative as we would be
+	// broadcasting the outer side. In that case, an LOJ would be better.
+
+	CDistributionSpec *const pdsInput = prppInput->Ped()->PdsRequired();
+	CEnfdDistribution::EDistributionMatching dmatch =
+		Edm(prppInput, child_index, pdrgpdpCtxt, ulOptReq);
+
+	if (exprhdl.NeedsSingletonExecution() || exprhdl.HasOuterRefs())
+	{
+		return GPOS_NEW(mp) CEnfdDistribution(
+			PdsRequireSingleton(mp, exprhdl, pdsInput, child_index), dmatch);
+	}
+
+	if (ulOptReq < NumDistrReq())
+	{
+		// requests 1 .. N are (redistribute, redistribute)
+		CDistributionSpec *pds = PdsRequiredRedistribute(
+			mp, exprhdl, pdsInput, child_index, pdrgpdpCtxt, ulOptReq);
+		if (CDistributionSpec::EdtHashed == pds->Edt())
+		{
+			CDistributionSpecHashed *pdsHashed =
+				CDistributionSpecHashed::PdsConvert(pds);
+			pdsHashed->ComputeEquivHashExprs(mp, exprhdl);
+		}
+		return GPOS_NEW(mp) CEnfdDistribution(pds, dmatch);
+	}
+	GPOS_ASSERT(ulOptReq == NumDistrReq());
+	return GPOS_NEW(mp) CEnfdDistribution(
+		PdsRequiredSingleton(mp, exprhdl, pdsInput, child_index, pdrgpdpCtxt),
+		dmatch);
+}
 
 //---------------------------------------------------------------------------
 //	@function:
@@ -955,8 +1241,7 @@ CPhysicalHashJoin::CreateOptRequests(CMemoryPool *mp)
 	// Req(N + 2) (non-singleton, broadcast)
 	// Req(N + 3) (singleton, singleton)
 
-	ULONG ulDistrReqs =
-		GPOPT_NON_HASH_DIST_REQUESTS + m_pdrgpdsRedistributeRequests->Size();
+	ULONG ulDistrReqs = GPOPT_NON_HASH_DIST_REQUESTS + NumDistrReq();
 	SetDistrRequests(ulDistrReqs);
 
 	// With DP enabled, there are several (max 10 controlled by macro)

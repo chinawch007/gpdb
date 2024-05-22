@@ -106,6 +106,21 @@ private:
 		}
 	};	// SContextIndexVarAttno
 
+	// context for finding security quals in an RTE
+	struct SContextSecurityQuals
+	{
+		// relid of the RTE to search in the rewritten parse tree
+		const OID m_relId;
+
+		// List to hold the security quals present in an RTE
+		List *m_security_quals{NIL};
+
+		// ctor
+		SContextSecurityQuals(const OID relId) : m_relId(relId)
+		{
+		}
+	};	// SContextSecurityQuals
+
 	// memory pool
 	CMemoryPool *m_mp;
 
@@ -141,6 +156,14 @@ private:
 
 	// walker to set inner var to outer
 	static BOOL SetHashKeysVarnoWalker(Node *node, void *context);
+
+	static BOOL FetchSecurityQualsWalker(
+		Node *node, SContextSecurityQuals *ctxt_security_quals);
+
+	static BOOL FetchSecurityQuals(Query *parsetree,
+								   SContextSecurityQuals *ctxt_security_quals);
+
+	static BOOL SetSecurityQualsVarnoWalker(Node *node, Index *index);
 
 public:
 	// ctor
@@ -302,12 +325,6 @@ private:
 			ctxt_translation_prev_siblings	// translation contexts of previous siblings
 	);
 
-	Plan *TranslateDXLSubQueryScan(
-		const CDXLNode *subquery_scan_dxlnode,
-		CDXLTranslateContext *output_context,
-		CDXLTranslationContextArray *
-			ctxt_translation_prev_siblings	// translation contexts of previous siblings
-	);
 
 	Plan *TranslateDXLProjectSet(const CDXLNode *result_dxlnode);
 
@@ -500,6 +517,8 @@ private:
 		CDXLTranslationContextArray *child_contexts, List **targetlist_out,
 		List **qual_out, CDXLTranslateContext *output_context);
 
+	void AddSecurityQuals(OID relId, List **qual, Index *index);
+
 	// translate the hash expr list of a redistribute motion node
 	void TranslateHashExprList(const CDXLNode *hash_expr_list_dxlnode,
 							   const CDXLTranslateContext *child_context,
@@ -564,8 +583,7 @@ private:
 		const IMDRelation *md_rel, CDXLTranslateContext *output_context,
 		CDXLTranslateContextBaseTable *base_table_context,
 		CDXLTranslationContextArray *ctxt_translation_prev_siblings,
-		List **index_cond, List **index_orig_cond, List **index_strategy_list,
-		List **index_subtype_list);
+		List **index_cond, List **index_orig_cond);
 
 	// translate the index filters
 	List *TranslateDXLIndexFilter(

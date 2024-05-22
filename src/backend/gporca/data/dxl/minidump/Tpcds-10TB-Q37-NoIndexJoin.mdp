@@ -25,6 +25,7 @@ select  i_item_id
       <dxl:CTEConfig CTEInliningCutoff="0"/>
       <dxl:WindowOids RowNumber="7000" Rank="7001"/>
       <dxl:CostModelConfig CostModelType="1" SegmentsForCosting="96"/>
+      <dxl:PlanHint/>
       <dxl:TraceFlags Value="103027,101013,102120,103001,103014,103015,103026"/>
     </dxl:OptimizerConfig>
     <dxl:Metadata SystemIds="0.GPDB">
@@ -34,7 +35,7 @@ select  i_item_id
         </dxl:Opfamilies>
       </dxl:Index>
       <dxl:RelationStatistics Mdid="2.42102149.1.1" Name="date_dim" Rows="73049.000000" EmptyRelation="false"/>
-      <dxl:Relation Mdid="6.42102149.1.0" Name="date_dim" IsTemporary="false" StorageType="Heap" DistributionPolicy="Hash" DistributionColumns="0" Keys="0,6;33,34,28" PartitionColumns="6">
+      <dxl:Relation Mdid="6.42102149.1.0" Name="date_dim" IsTemporary="false" Rows="73049.000000" StorageType="Heap" DistributionPolicy="Hash" DistributionColumns="0" Keys="0,6;33,34,28" PartitionColumns="6">
         <dxl:Columns>
           <dxl:Column Name="d_date_sk" Attno="1" Mdid="0.23.1.0" Nullable="false" ColWidth="4">
           </dxl:Column>
@@ -596,7 +597,7 @@ select  i_item_id
           </dxl:And>
         </dxl:PartConstraint>
       </dxl:Relation>
-      <dxl:Relation Mdid="6.42102149.1.1" Name="date_dim" IsTemporary="false" StorageType="Heap" DistributionPolicy="Hash" DistributionColumns="0" Keys="0,6;33,34,28" PartitionColumns="6">
+      <dxl:Relation Mdid="6.42102149.1.1" Name="date_dim" IsTemporary="false" Rows="73049.000000" StorageType="Heap" DistributionPolicy="Hash" DistributionColumns="0" Keys="0,6;33,34,28" PartitionColumns="6">
         <dxl:Columns>
           <dxl:Column Name="d_date_sk" Attno="1" Mdid="0.23.1.0" Nullable="false" ColWidth="4">
           </dxl:Column>
@@ -7789,7 +7790,7 @@ select  i_item_id
           <dxl:Opfamily Mdid="0.1978.1.0"/>
         </dxl:Opfamilies>
       </dxl:Index>
-      <dxl:Relation Mdid="6.42110250.1.0" Name="item" IsTemporary="false" StorageType="Heap" DistributionPolicy="Hash" DistributionColumns="0" Keys="0;28,22">
+      <dxl:Relation Mdid="6.42110250.1.0" Name="item" IsTemporary="false" Rows="18000.000000" StorageType="Heap" DistributionPolicy="Hash" DistributionColumns="0" Keys="0;28,22">
         <dxl:Columns>
           <dxl:Column Name="i_item_sk" Attno="1" Mdid="0.23.1.0" Nullable="false" ColWidth="4">
           </dxl:Column>
@@ -7861,7 +7862,7 @@ select  i_item_id
         </dxl:IndexInfoList>
         <dxl:CheckConstraints/>
       </dxl:Relation>
-      <dxl:Relation Mdid="6.42110250.1.1" Name="item" IsTemporary="false" StorageType="Heap" DistributionPolicy="Hash" DistributionColumns="0" Keys="0;28,22">
+      <dxl:Relation Mdid="6.42110250.1.1" Name="item" IsTemporary="false" Rows="18000.000000" StorageType="Heap" DistributionPolicy="Hash" DistributionColumns="0" Keys="0;28,22">
         <dxl:Columns>
           <dxl:Column Name="i_item_sk" Attno="1" Mdid="0.23.1.0" Nullable="false" ColWidth="4">
           </dxl:Column>
@@ -7953,7 +7954,7 @@ select  i_item_id
           <dxl:Partition Mdid="6.42121396005.1.0"/>
         </dxl:Partitions>
       </dxl:Index>
-      <dxl:Relation Mdid="6.42101810.1.0" Name="catalog_sales" IsTemporary="false" StorageType="Heap" DistributionPolicy="Hash" DistributionColumns="15,17" Keys="15,17,0;39,40,34" PartitionColumns="0">
+      <dxl:Relation Mdid="6.42101810.1.0" Name="catalog_sales" IsTemporary="false" Rows="14745100288.000000" StorageType="Heap" DistributionPolicy="Hash" DistributionColumns="15,17" Keys="15,17,0;39,40,34" PartitionColumns="0">
         <dxl:Columns>
           <dxl:Column Name="cs_sold_date_sk" Attno="1" Mdid="0.23.1.0" Nullable="false" ColWidth="4">
           </dxl:Column>
@@ -8650,7 +8651,7 @@ select  i_item_id
           <dxl:Partition Mdid="6.42118452005.1.0"/>
         </dxl:Partitions>
       </dxl:Index>
-      <dxl:Relation Mdid="6.42101810.1.1" Name="catalog_sales" IsTemporary="false" StorageType="Heap" DistributionPolicy="Hash" DistributionColumns="15,17" Keys="15,17,0;39,40,34" PartitionColumns="0">
+      <dxl:Relation Mdid="6.42101810.1.1" Name="catalog_sales" IsTemporary="false" Rows="14745100288.000000" StorageType="Heap" DistributionPolicy="Hash" DistributionColumns="15,17" Keys="15,17,0;39,40,34" PartitionColumns="0">
         <dxl:Columns>
           <dxl:Column Name="cs_sold_date_sk" Attno="1" Mdid="0.23.1.0" Nullable="false" ColWidth="4">
           </dxl:Column>
@@ -14077,7 +14078,7 @@ select  i_item_id
         </dxl:StatsBucket>
       </dxl:ColumnStatistics>
       <dxl:RelationStatistics Mdid="2.42110028.1.1" Name="inventory" Rows="11742500.000000" EmptyRelation="false"/>
-      <dxl:Relation Mdid="6.42110028.1.0" Name="inventory" IsTemporary="false" StorageType="Heap" DistributionPolicy="Hash" DistributionColumns="0,1,2" Keys="0,1,2;9,10,4" PartitionColumns="0">
+      <dxl:Relation Mdid="6.42110028.1.0" Name="inventory" IsTemporary="false" Rows="11742500.000000" StorageType="Heap" DistributionPolicy="Hash" DistributionColumns="0,1,2" Keys="0,1,2;9,10,4" PartitionColumns="0">
         <dxl:Columns>
           <dxl:Column Name="inv_date_sk" Attno="1" Mdid="0.23.1.0" Nullable="false" ColWidth="4">
           </dxl:Column>
@@ -14369,7 +14370,7 @@ select  i_item_id
           <dxl:Opfamily Mdid="0.3022.1.0"/>
         </dxl:Opfamilies>
       </dxl:GPDBScalarOp>
-      <dxl:Relation Mdid="6.42110028.1.1" Name="inventory" IsTemporary="false" StorageType="Heap" DistributionPolicy="Hash" DistributionColumns="0,1,2" Keys="0,1,2;9,10,4" PartitionColumns="0">
+      <dxl:Relation Mdid="6.42110028.1.1" Name="inventory" IsTemporary="false" Rows="11742500.000000" StorageType="Heap" DistributionPolicy="Hash" DistributionColumns="0,1,2" Keys="0,1,2;9,10,4" PartitionColumns="0">
         <dxl:Columns>
           <dxl:Column Name="inv_date_sk" Attno="1" Mdid="0.23.1.0" Nullable="false" ColWidth="4">
           </dxl:Column>

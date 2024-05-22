@@ -73,7 +73,7 @@
 
 #define GPSEGCONFIGDUMPFILE "gpsegconfig_dump"
 #define GPSEGCONFIGDUMPFILETMP "gpsegconfig_dump_tmp"
-#define GPSEGCONFIGNUMATTR 9 
+#define GPSEGCONFIGNUMATTR 10
 
 MemoryContext CdbComponentsContext = NULL;
 static CdbComponentDatabases *cdb_component_dbs = NULL;
@@ -134,7 +134,8 @@ readGpSegConfigFromFTSFiles(int *total_dbs)
 
 	char	hostname[MAXHOSTNAMELEN];
 	char	address[MAXHOSTNAMELEN];
-	char	buf[MAXHOSTNAMELEN * 2 + 32];
+	char    datadir[MAXPGPATH];
+	char	buf[MAXHOSTNAMELEN * 2 + MAXPGPATH + 32];
 
 	Assert(!IsTransactionState());
 
@@ -152,9 +153,9 @@ readGpSegConfigFromFTSFiles(int *total_dbs)
 	{ 
 		config = &configs[idx];
 
-		if (sscanf(buf, "%d %d %c %c %c %c %d %s %s", (int *)&config->dbid, (int *)&config->segindex,
+		if (sscanf(buf, "%d %d %c %c %c %c %d %s %s %s", (int *)&config->dbid, (int *)&config->segindex,
 				   &config->role, &config->preferred_role, &config->mode, &config->status,
-				   &config->port, hostname, address) != GPSEGCONFIGNUMATTR)
+				   &config->port, hostname, address, datadir) != GPSEGCONFIGNUMATTR)
 		{
 			FreeFile(fd);
 			elog(ERROR, "invalid data in gp_segment_configuration dump file: %s:%m", GPSEGCONFIGDUMPFILE);
@@ -162,6 +163,7 @@ readGpSegConfigFromFTSFiles(int *total_dbs)
 
 		config->hostname = pstrdup(hostname);
 		config->address = pstrdup(address);
+		config->datadir = pstrdup(datadir);
 
 		idx++;
 		/*
@@ -212,9 +214,9 @@ writeGpSegConfigToFTSFiles(void)
 	{
 		config = &configs[idx];
 
-		if (fprintf(fd, "%d %d %c %c %c %c %d %s %s\n", config->dbid, config->segindex,
+		if (fprintf(fd, "%d %d %c %c %c %c %d %s %s %s\n", config->dbid, config->segindex,
 					config->role, config->preferred_role, config->mode, config->status,
-					config->port, config->hostname, config->address) < 0)
+					config->port, config->hostname, config->address, config->datadir) < 0)
 		{
 			FreeFile(fd);
 			elog(ERROR, "could not dump gp_segment_configuration to file: %s: %m", GPSEGCONFIGDUMPFILE);
@@ -298,7 +300,10 @@ readGpSegConfigFromCatalog(int *total_dbs)
 		Assert(!isNull);
 		config->port = DatumGetInt32(attr);
 
-		/* datadir is not dumped*/
+		/* datadir */
+		attr = heap_getattr(gp_seg_config_tuple, Anum_gp_segment_configuration_datadir, RelationGetDescr(gp_seg_config_rel), &isNull);
+		Assert(!isNull);
+		config->datadir = TextDatumGetCString(attr);
 
 		idx++;
 
@@ -543,7 +548,7 @@ getCdbComponentInfo(void)
 	{
 		cdbInfo = &component_databases->segment_db_info[i];
 
-		if (cdbInfo->config->role != GP_SEGMENT_CONFIGURATION_ROLE_PRIMARY)
+		if (!IS_HOT_STANDBY_QD() && cdbInfo->config->role != GP_SEGMENT_CONFIGURATION_ROLE_PRIMARY)
 			continue;
 
 		hsEntry = (HostPrimaryCountEntry *) hash_search(hostPrimaryCountHash, cdbInfo->config->hostname, HASH_FIND, &found);
@@ -555,7 +560,7 @@ getCdbComponentInfo(void)
 	{
 		cdbInfo = &component_databases->entry_db_info[i];
 
-		if (cdbInfo->config->role != GP_SEGMENT_CONFIGURATION_ROLE_PRIMARY)
+		if (!IS_HOT_STANDBY_QD() && cdbInfo->config->role != GP_SEGMENT_CONFIGURATION_ROLE_PRIMARY)
 			continue;
 
 		hsEntry = (HostPrimaryCountEntry *) hash_search(hostPrimaryCountHash, cdbInfo->config->hostname, HASH_FIND, &found);
@@ -1011,7 +1016,16 @@ cdbcomponent_getComponentInfo(int contentId)
 	/* entry db */
 	if (contentId == -1)
 	{
-		cdbInfo = &cdbs->entry_db_info[0];	
+		Assert(cdbs->total_entry_dbs == 1 || cdbs->total_entry_dbs == 2);
+		/*
+		 * For a standby QD, get the last entry db which can be the first (on
+		 * a replica cluster) or the second (on a mirrored cluster) entry.
+		 */
+		if (IS_HOT_STANDBY_QD())
+			cdbInfo = &cdbs->entry_db_info[cdbs->total_entry_dbs - 1];
+		else
+			cdbInfo = &cdbs->entry_db_info[0];	
+
 		return cdbInfo;
 	}
 
@@ -1028,10 +1042,10 @@ cdbcomponent_getComponentInfo(int contentId)
 		Assert(cdbs->total_segment_dbs == cdbs->total_segments * 2);
 		cdbInfo = &cdbs->segment_db_info[2 * contentId];
 
-		if (!SEGMENT_IS_ACTIVE_PRIMARY(cdbInfo))
-		{
+		/* use the other segment if it is not what the QD wants */
+		if ((IS_HOT_STANDBY_QD() && SEGMENT_IS_ACTIVE_PRIMARY(cdbInfo)) 
+						|| (!IS_HOT_STANDBY_QD() && !SEGMENT_IS_ACTIVE_PRIMARY(cdbInfo)))
 			cdbInfo = &cdbs->segment_db_info[2 * contentId + 1];
-		}
 
 		return cdbInfo;
 	}
@@ -1124,10 +1138,21 @@ cdb_setup(void)
 	 *
 	 * Ignore background worker because bgworker_should_start_mpp() already did
 	 * the check.
+	 *
+	 * Ignore if we are the standby coordinator started in hot standby mode.
+	 * We don't expect dtx recovery to have finished, as dtx recovery is
+	 * performed at the end of startup. In hot standby, we are recovering
+	 * continuously and should allow queries much earlier. Since a hot standby
+	 * won't proceed dtx, it is not required to wait for recovery of the dtx
+	 * that has been prepared but not committed (i.e. to commit them); on the
+	 * other hand, the recovery of any in-doubt transactions (i.e. not prepared)
+	 * won't bother a hot standby either, just like they can be recovered in the 
+	 * background when a primary instance is running.
 	 */
 	if (!IsBackgroundWorker &&
 		Gp_role == GP_ROLE_DISPATCH &&
-		!*shmDtmStarted)
+		!*shmDtmStarted &&
+		!IS_HOT_STANDBY_QD())
 	{
 		ereport(FATAL,
 				(errcode(ERRCODE_CANNOT_CONNECT_NOW),

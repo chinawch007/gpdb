@@ -208,10 +208,10 @@ private:
 										 CharPtrArray **part_types);
 
 	// get keysets for relation
-	static ULongPtr2dArray *RetrieveRelKeysets(CMemoryPool *mp, OID oid,
-											   BOOL should_add_default_keys,
-											   BOOL is_partitioned,
-											   ULONG *attno_mapping);
+	static ULongPtr2dArray *RetrieveRelKeysets(
+		CMemoryPool *mp, OID oid, BOOL should_add_default_keys,
+		BOOL is_partitioned, ULONG *attno_mapping,
+		IMDRelation::Ereldistrpolicy rel_distr_policy);
 
 	// storage type for a relation
 	static IMDRelation::Erelstoragetype RetrieveRelStorageType(Relation rel);
@@ -270,6 +270,13 @@ private:
 
 	static IMdIdArray *RetrieveRelDistributionOpFamilies(CMemoryPool *mp,
 														 GpPolicy *policy);
+
+	// generate statistics for the system level columns
+	static CDXLColStats *GenerateStatsForSystemCols(
+		CMemoryPool *mp, const IMDRelation *md_rel,
+		CMDIdColStats *mdid_col_stats, CMDName *md_colname, IMDId *mdid_atttype,
+		AttrNumber attrnum, CDXLBucketArray *dxl_stats_bucket_array,
+		CDouble rows);
 
 	static IMdIdArray *RetrieveIndexPartitions(CMemoryPool *mp, OID rel_oid);
 

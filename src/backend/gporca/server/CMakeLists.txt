@@ -22,7 +22,6 @@ if (COMPILER_HAS_WNO_LONG_LONG)
                                 src/unittest/dxl/statistics/CJoinCardinalityTest.cpp
                                 src/unittest/dxl/statistics/CFilterCardinalityTest.cpp
                                 src/unittest/gpopt/base/CConstraintTest.cpp
-                                src/unittest/gpopt/metadata/CPartConstraintTest.cpp
                                 PROPERTIES COMPILE_FLAGS "-Wno-long-long")
 endif()
 
@@ -59,7 +58,7 @@ NestedInSubqWithPrjListOuterRefNoInnerRef  InEqualityJoin Correlated-SemiJoin
 CorrelatedSemiJoin-True CorrelatedIN-LeftSemiJoin-True CorrelatedIN-LeftSemiNotIn-True
 InSubqWithPrjListOuterRefNoInnerRefColumnPlusConstIn CorrelatedIN-LeftSemiJoin-Limit
 CorrelatedLeftSemiNLJoinWithLimit PushFilterToSemiJoinLeftChild SubqOuterReferenceInClause
-SemiJoinDPE InSubqWithPrjListReturnSet;
+SemiJoinDPE InSubqWithPrjListReturnSet LeftSemiJoinWithRepOuterTab LeftSemiJoinCE;
 
 CAntiSemiJoinTest:
 AntiSemiJoin2Select-1 AntiSemiJoin2Select-2 NOT-IN-NotNullBoth NOT-IN-NullInner NOT-IN-NullOuter
@@ -85,7 +84,7 @@ InferPredicatesJoinSubquery JoinPredFalseFilter;
 
 CLikeIDFTest:
 LIKE-Pattern-green LIKE-Pattern-green-2 LIKE-Pattern-Empty Nested-Or-Predicates Join-IDF
-LikePredStatsNotComparable PredStatsNotComparable ExtractPredicateFromDisj CollapseNot
+LikePredStatsNotComparable PredStatsNotComparable CollapseNot
 IDF-NotNullConstant IDF-NullConstant INDF-NotNullConstant INDF-NullConstant NullConstant-INDF-Col
 Join-INDF Join-INDF-NoBroadcast Join-INDF-Nulls-Not-Collocated;
 
@@ -178,7 +177,7 @@ ProjectRepeatedColumn1 ProjectRepeatedColumn2 NLJ-BC-Outer-Spool-Inner Self-Comp
 SelectCheckConstraint ExpandJoinOrder SelectOnBpchar EqualityJoin EffectsOfJoinFilter InnerJoin-With-OuterRefs
 UDA-AnyElement-1 UDA-AnyElement-2 Project-With-NonScalar-Func SixWayDPv2 Join-Varchar-Equality NLJ-Rewindability
 NLJ-Rewindability-CTAS DisableBroadcastThreshold VariadicFlagWithJson VariadicFlagWithFormatQuery VariadicFlagWithUnionAll
-IndexScanCosting IndexOnlyScanCosting DynamicIndexScanCosting DynamicIndexOnlyScanCosting;
+IndexScanCosting IndexOnlyScanCosting DynamicIndexScanCosting DynamicIndexOnlyScanCosting BroadcastSkewedJoinWithNulls;
 
 CJoinPredTest:
 MultipleDampedPredJoinCardinality MultipleIndependentPredJoinCardinality MultiDistKeyJoinCardinality
@@ -243,7 +242,7 @@ CPartTblDPETest:
 PartTbl-AvoidRangePred-DPE PartTbl-DPE-Correlated-NLOuter
 PartTbl-DPE PartTbl-DPE-GroupBy PartTbl-DPE-Limit
 DPE-with-unsupported-pred DPE-SemiJoin DPE-IN DPE-NOT-IN HJN-DPE-Bitmap-Outer-Child
-NLJ-Broadcast-DPE-Outer-Child PartTbl-MultiWayJoinWithDPE PartTbl-MultiWayJoinWithDPE-2
+NLJ-Broadcast-DPE-Outer-Child PartTbl-MultiWayJoinWithDPE-2
 PartTbl-LeftOuterHashJoin-DPE-IsNull PartTbl-LeftOuterNLJoin-DPE-IsNull
 PartTbl-List-DPE-Int-Predicates JoinOrderDPE PartTbl-DPE-Opfamily
 PartTbl-DPE-DynamicIndexOnlyScan-Range;
@@ -281,7 +280,7 @@ CSetop4Test:
 PushSelectDownUnionAllOfCTG Push-Subplan-Below-Union Intersect-OuterRefs
 PushSelectWithOuterRefBelowUnion PushGbBelowUnion UnionGbSubquery
 AnyPredicate-Over-UnionOfConsts EquivClassesUnion EquivClassesIntersect
-IndexScanWithNestedCTEAndSetOp Blocking-Spool-Parallel-Union-All;
+IndexScanWithNestedCTEAndSetOp Blocking-Spool-Parallel-Union-All ParallelUnionAllWithJson;
 
 CEquivClassTest:
 Equiv-HashedDistr-1 Equiv-HashedDistr-2 EquivClassesAndOr EquivClassesLimit IndexNLJoin_Cast_NoMotion;
@@ -296,7 +295,7 @@ LeftJoinPruning LeftJoinPruningOuterQuery LeftJoinPruningInnerQuery LeftJoinPrun
 
 COuterJoin2Test:
 LOJ-IsNullPred Select-Proj-OuterJoin OuterJoin-With-OuterRefs Join-Disj-Subqs
-EffectOfLocalPredOnJoin EffectOfLocalPredOnJoin2 EffectOfLocalPredOnJoin3
+EffectOfLocalPredOnJoin EffectOfLocalPredOnJoin3
 LeftJoin-UnsupportedFilter-Cardinality LeftOuter2InnerUnionAllAntiSemiJoin
 LOJ-With-Single-Pred-On-Outer LOJ_NULLTEST-On-SelfCheck-Pred;
 
@@ -312,7 +311,7 @@ LOJ_convert_to_inner_with_or_predicate LOJNonNullRejectingPredicates LOJNullReje
 LOJNullRejectingZeroPlacePredicates;
 
 CFullJoinTest:
-FOJ-Condition-False ExpandFullOuterJoin ExpandFullOuterJoin2 FullOuterJoin-NullRejectingLHS1 FullOuterJoin-NullRejectingLHS2
+FOJ-Condition-False FullOuterJoin-NullRejectingLHS1 FullOuterJoin-NullRejectingLHS2
 FullJoin-InnerNotOnDistributionColumn FullJoin-NotOnDistributionColumn FullJoin-2PredicateOnDistColumns
 FullJoin-OnDistributionColumn FullJoin-SwappedPredicates FullJoin-Replicated 
 FullJoin-SubqueryWithRedistribute FullJoin-SubquerySingleton FullJoin-Subquery-CastedPredicates
@@ -402,7 +401,7 @@ CScalarFuncPushDownTest:
 ScalarFuncPushedBelowGather ConstScalarFuncNotPushedBelowGather;
 
 CScalarTest:
-FieldSelect;
+FieldSelect FunctionWithQueryParam BasicQueryParam;
 
 COrderedAggTest:
 CTAS_OrderedAgg_multiple_cols OrderedAgg_multiple_diffcol OrderedAgg_with_groupby OrderedAgg_computed_col
@@ -414,8 +413,19 @@ CoveringIndexTest:
 CoveringIndex-1 CoveringIndex-2 CoveringIndex-3 CoveringIndex-Cost-1 CoveringIndex-Cost-2
 CoveringIndex-DoesSupport-Gist CoveringIndex-DoesNotSupport-Gin;
 
+CPlanHintsTest:
+Hint-SeqScan-Over-Table Hint-SeqScan-Over-Join
+Hint-IndexScan-Over-Table Hint-IndexScan-Over-Join Hint-NoIndexScan-Over-Table
+Hint-IndexOnlyScan-Over-Table Hint-NoIndexOnlyScan-Over-Table
+Hint-BitmapScan-Over-Table Hint-NoBitmapScan-Over-Table
+Hint-AbsoluteRows-Over-Join Hint-AddRows-Over-Join Hint-SubtractRows-Over-Join Hint-MultiplyRows-Over-Join
+Hint-Leading-Multiple Hint-Leading-Directed Hint-Leading-NonDirected;
+
 CForeignPartTest:
-ForeignPartUniform PartForeignMixed PartForeignDifferentServer PartForeignDifferentExecLocation PartForeignMixedDPE PartForeignMixedSPE PartForeignUniformSPE ForeignScanExecLocAnySimpleScan ForeignScanExecLocAnyJoin ForeignPartOneTimeFilterDPE
+ForeignPartUniform PartForeignMixed PartForeignDifferentServer PartForeignDifferentExecLocation PartForeignMixedDPE PartForeignMixedSPE PartForeignUniformSPE ForeignScanExecLocAnySimpleScan ForeignScanExecLocAnyJoin ForeignPartOneTimeFilterDPE;
+
+CCardinalityTest:
+SystemColCtidStats SystemColSegIdStats
 ")
 
 set(mdp_dir "../data/dxl/minidump/")
@@ -528,12 +538,7 @@ add_orca_test(CMinidumpWithConstExprEvaluatorTest)
 add_orca_test(CParseHandlerManagerTest)
 add_orca_test(CParseHandlerTest)
 add_orca_test(CParseHandlerCostModelTest)
-# FIXME: this following test was first introduced (but as a typo) in
-# greenplum-db/gporca#355. I've corrected the typo but it's not clear whether
-# it ever passed, but we should give it a best-effort resurrection.
-if (FALSE)
 add_orca_test(CParseHandlerOptimizerConfigSerializeTest)
-endif()
 add_orca_test(CStatisticsTest)
 add_orca_test(CPointTest)
 add_orca_test(CBucketTest)
@@ -583,7 +588,6 @@ add_orca_test(CNameTest)
 add_orca_test(COrderSpecTest)
 add_orca_test(CRangeTest)
 add_orca_test(CPredicateUtilsTest)
-add_orca_test(CPartConstraintTest)
 
 add_orca_test(CSearchStrategyTest)
 

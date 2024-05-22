@@ -44,6 +44,7 @@ func RootCommand() *cobra.Command {
 		startCmd(),
 		statusCmd(),
 		stopCmd(),
+		initCmd(),
 	)
 
 	return root
@@ -59,29 +60,26 @@ func InitializeCommand(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	hubLogDir = Conf.LogDir
-	InitializeLogger(cmd, args)
+
+	err = InitializeLogger(cmd, args)
+	if err != nil {
+		return err
+	}
 
 	return nil
 }
 
-func InitializeLogger(cmd *cobra.Command, args []string) {
+func InitializeLogger(cmd *cobra.Command, args []string) error {
 	// CommandPath lists the names of the called command and all of its parent commands, so this
 	// turns e.g. "gp stop hub" into "gp_stop_hub" to generate a unique log file name for each command.
 	logName := strings.ReplaceAll(cmd.CommandPath(), " ", "_")
-	gplog.SetLogFileNameFunc(func(program string, logdir string) string {
-		// TODO: Check if this path exists or not, otherwise gplog panics
-		return filepath.Join(hubLogDir, fmt.Sprintf("%s.log", logName))
-	})
-	gplog.InitializeLogging(logName, "")
+	gplog.InitializeLogging(logName, hubLogDir)
 
-	timeFormat := time.Now().Format("2006-01-02 15:04:05.000000")
-	hostname, _ := os.Hostname()
-	gplog.SetLogPrefixFunc(func(level string) string {
-		return fmt.Sprintf("%s %s  [%s] ", timeFormat, hostname, level) // TODO: decide what prefix we want, assuming we want one, but we *definitely* don't want the legacy one
-	})
 	if Verbose {
-		gplog.SetVerbosity(gplog.LOGDEBUG)
+		gplog.SetVerbosity(gplog.LOGVERBOSE)
 	}
+
+	return nil
 }
 
 func ConnectToHubFunc(conf *hub.Config) (idl.HubClient, error) {

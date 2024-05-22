@@ -36,6 +36,66 @@ func (m *MockHubClient) EXPECT() *MockHubClientMockRecorder {
 	return m.recorder
 }
 
+// AddMirrors mocks base method.
+func (m *MockHubClient) AddMirrors(arg0 context.Context, arg1 *idl.AddMirrorsRequest, arg2 ...grpc.CallOption) (idl.Hub_AddMirrorsClient, error) {
+	m.ctrl.T.Helper()
+	varargs := []interface{}{arg0, arg1}
+	for _, a := range arg2 {
+		varargs = append(varargs, a)
+	}
+	ret := m.ctrl.Call(m, "AddMirrors", varargs...)
+	ret0, _ := ret[0].(idl.Hub_AddMirrorsClient)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// AddMirrors indicates an expected call of AddMirrors.
+func (mr *MockHubClientMockRecorder) AddMirrors(arg0, arg1 interface{}, arg2 ...interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	varargs := append([]interface{}{arg0, arg1}, arg2...)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AddMirrors", reflect.TypeOf((*MockHubClient)(nil).AddMirrors), varargs...)
+}
+
+// GetAllHostNames mocks base method.
+func (m *MockHubClient) GetAllHostNames(arg0 context.Context, arg1 *idl.GetAllHostNamesRequest, arg2 ...grpc.CallOption) (*idl.GetAllHostNamesReply, error) {
+	m.ctrl.T.Helper()
+	varargs := []interface{}{arg0, arg1}
+	for _, a := range arg2 {
+		varargs = append(varargs, a)
+	}
+	ret := m.ctrl.Call(m, "GetAllHostNames", varargs...)
+	ret0, _ := ret[0].(*idl.GetAllHostNamesReply)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetAllHostNames indicates an expected call of GetAllHostNames.
+func (mr *MockHubClientMockRecorder) GetAllHostNames(arg0, arg1 interface{}, arg2 ...interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	varargs := append([]interface{}{arg0, arg1}, arg2...)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetAllHostNames", reflect.TypeOf((*MockHubClient)(nil).GetAllHostNames), varargs...)
+}
+
+// MakeCluster mocks base method.
+func (m *MockHubClient) MakeCluster(arg0 context.Context, arg1 *idl.MakeClusterRequest, arg2 ...grpc.CallOption) (idl.Hub_MakeClusterClient, error) {
+	m.ctrl.T.Helper()
+	varargs := []interface{}{arg0, arg1}
+	for _, a := range arg2 {
+		varargs = append(varargs, a)
+	}
+	ret := m.ctrl.Call(m, "MakeCluster", varargs...)
+	ret0, _ := ret[0].(idl.Hub_MakeClusterClient)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// MakeCluster indicates an expected call of MakeCluster.
+func (mr *MockHubClientMockRecorder) MakeCluster(arg0, arg1 interface{}, arg2 ...interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	varargs := append([]interface{}{arg0, arg1}, arg2...)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "MakeCluster", reflect.TypeOf((*MockHubClient)(nil).MakeCluster), varargs...)
+}
+
 // StartAgents mocks base method.
 func (m *MockHubClient) StartAgents(arg0 context.Context, arg1 *idl.StartAgentsRequest, arg2 ...grpc.CallOption) (*idl.StartAgentsReply, error) {
 	m.ctrl.T.Helper()
@@ -137,6 +197,49 @@ func NewMockHubServer(ctrl *gomock.Controller) *MockHubServer {
 // EXPECT returns an object that allows the caller to indicate expected use.
 func (m *MockHubServer) EXPECT() *MockHubServerMockRecorder {
 	return m.recorder
+}
+
+// AddMirrors mocks base method.
+func (m *MockHubServer) AddMirrors(arg0 *idl.AddMirrorsRequest, arg1 idl.Hub_AddMirrorsServer) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "AddMirrors", arg0, arg1)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// AddMirrors indicates an expected call of AddMirrors.
+func (mr *MockHubServerMockRecorder) AddMirrors(arg0, arg1 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AddMirrors", reflect.TypeOf((*MockHubServer)(nil).AddMirrors), arg0, arg1)
+}
+
+// GetAllHostNames mocks base method.
+func (m *MockHubServer) GetAllHostNames(arg0 context.Context, arg1 *idl.GetAllHostNamesRequest) (*idl.GetAllHostNamesReply, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetAllHostNames", arg0, arg1)
+	ret0, _ := ret[0].(*idl.GetAllHostNamesReply)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetAllHostNames indicates an expected call of GetAllHostNames.
+func (mr *MockHubServerMockRecorder) GetAllHostNames(arg0, arg1 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetAllHostNames", reflect.TypeOf((*MockHubServer)(nil).GetAllHostNames), arg0, arg1)
+}
+
+// MakeCluster mocks base method.
+func (m *MockHubServer) MakeCluster(arg0 *idl.MakeClusterRequest, arg1 idl.Hub_MakeClusterServer) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "MakeCluster", arg0, arg1)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// MakeCluster indicates an expected call of MakeCluster.
+func (mr *MockHubServerMockRecorder) MakeCluster(arg0, arg1 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "MakeCluster", reflect.TypeOf((*MockHubServer)(nil).MakeCluster), arg0, arg1)
 }
 
 // StartAgents mocks base method.

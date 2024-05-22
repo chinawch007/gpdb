@@ -20,7 +20,6 @@
 #include "gpopt/base/COptCtxt.h"
 #include "gpopt/base/CUtils.h"
 #include "gpopt/metadata/CName.h"
-#include "gpopt/metadata/CPartConstraint.h"
 #include "gpopt/operators/CExpressionHandle.h"
 #include "gpopt/operators/CPredicateUtils.h"
 #include "naucrates/statistics/CStatisticsUtils.h"
@@ -166,11 +165,11 @@ CLogicalDynamicIndexGet::PopCopyWithRemappedColumns(
 	CColRef2dArray *pdrgpdrgpcrPart = CUtils::PdrgpdrgpcrRemap(
 		mp, m_pdrgpdrgpcrPart, colref_mapping, must_exist);
 
-	m_ptabdesc->AddRef();
+	Ptabdesc()->AddRef();
 	m_partition_mdids->AddRef();
 
 	return GPOS_NEW(mp) CLogicalDynamicIndexGet(
-		mp, pmdindex, m_ptabdesc, m_ulOriginOpId, pnameAlias, m_scan_id,
+		mp, pmdindex, Ptabdesc(), m_ulOriginOpId, pnameAlias, m_scan_id,
 		pdrgpcrOutput, pdrgpdrgpcrPart, m_partition_mdids,
 		m_ulUnindexedPredColCount);
 }

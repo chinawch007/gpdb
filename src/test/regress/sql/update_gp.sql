@@ -3,6 +3,13 @@
 -- a different distribution key. 'p' table's distribution key matches
 -- that of 'r', but 'p2's doesn't. Test that the planner adds a Motion
 -- node correctly for p2.
+-- start_matchsubs
+-- m/\(cost=.*\)/
+-- s/\(cost=.*\)//
+--
+-- m/\(slice.*\)/
+-- s/\(slice.*\)//
+-- end_matchsubs
 create table todelete (a int) distributed by (a);
 create table parent (a int, b int, c int) distributed by (a);
 create table child (a int, b int, c int) inherits (parent) distributed by (b);
@@ -64,6 +71,10 @@ insert into base_tbl select g, g from generate_series(1, 5) g;
 
 explain (costs off) update base_tbl set a=a+1;
 update base_tbl set a = 5;
+
+-- Test dropped column for update.
+alter table base_tbl drop column b;
+explain (costs off) update base_tbl set a=a+1;
 
 --
 -- Explicit Distribution motion must be added if any of the child nodes

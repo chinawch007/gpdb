@@ -212,13 +212,14 @@ CTableDescriptor::AddDistributionColumn(ULONG ulPos, IMDId *opfamily)
 //		CTableDescriptor::AddPartitionColumn
 //
 //	@doc:
-//		Add the column at the specified position to the array of partition column
-//		descriptors
+//		Add the column's position to the array of partition columns
 //
 //---------------------------------------------------------------------------
 void
 CTableDescriptor::AddPartitionColumn(ULONG ulPos)
 {
+	CColumnDescriptor *pcoldesc = (*m_pdrgpcoldesc)[ulPos];
+	pcoldesc->SetAsPartCol();
 	m_pdrgpulPart->Append(GPOS_NEW(m_mp) ULONG(ulPos));
 }
 
@@ -307,6 +308,34 @@ CTableDescriptor::IndexCount()
 	const ULONG ulIndices = pmdrel->IndexCount();
 
 	return ulIndices;
+}
+
+//---------------------------------------------------------------------------
+//	@function:
+//		CTableDescriptor::HashValue
+//
+//	@doc:
+//		Returns hash value of the relation. The value is unique by MDId and
+//		relation name (or alias).
+//
+//
+//---------------------------------------------------------------------------
+ULONG
+CTableDescriptor::HashValue(const CTableDescriptor *ptabdesc)
+{
+	ULONG ulHash =
+		gpos::CombineHashes(ptabdesc->MDId()->HashValue(),
+							CWStringConst::HashValue(ptabdesc->Name().Pstr()));
+
+	return ulHash;
+}
+
+BOOL
+CTableDescriptor::Equals(const CTableDescriptor *ptabdescLeft,
+						 const CTableDescriptor *ptabdescRight)
+{
+	return ptabdescLeft->MDId()->Equals(ptabdescRight->MDId()) &&
+		   ptabdescLeft->Name().Equals(ptabdescRight->Name());
 }
 
 

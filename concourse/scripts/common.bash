@@ -30,7 +30,11 @@ function build_arch() {
 
 function install_gpdb() {
     mkdir -p /usr/local/greenplum-db-devel
-    tar -xzf bin_gpdb/bin_gpdb.tar.gz -C /usr/local/greenplum-db-devel
+    if [[ "${CONFIGURE_FLAGS}" =~ enable-cassert && -d bin_gpdb_with_llvm_asserts ]]; then
+      tar -xzf bin_gpdb_with_llvm_asserts/bin_gpdb_with_llvm_asserts.tar.gz -C /usr/local/greenplum-db-devel
+    else
+      tar -xzf bin_gpdb/bin_gpdb.tar.gz -C /usr/local/greenplum-db-devel
+    fi
 }
 
 # In a pipeline for tests with asserts, standard LLVM is replaced to custom one
@@ -142,7 +146,7 @@ function configure() {
     # The full set of configure options which were used for building the
     # tree must be used here as well since the toplevel Makefile depends
     # on these options for deciding what to test. Since we don't ship
-    ./configure --prefix=/usr/local/greenplum-db-devel --disable-orca --enable-gpcloud --enable-orafce --enable-tap-tests --with-gssapi --with-libxml --with-openssl --with-perl --with-python --with-uuid=e2fs --with-llvm --with-zstd PYTHON=python3.9 PKG_CONFIG_PATH="${GPHOME}/lib/pkgconfig" ${CONFIGURE_FLAGS}
+    ./configure --prefix=/usr/local/greenplum-db-devel --disable-orca --enable-gpcloud --enable-orafce --enable-tap-tests --with-gssapi --with-libxml --with-openssl --with-perl --with-python --with-uuid=e2fs --with-llvm --with-zstd PYTHON=python3.11 PKG_CONFIG_PATH="${GPHOME}/lib/pkgconfig" ${CONFIGURE_FLAGS}
 
     popd
 }

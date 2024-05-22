@@ -1,3 +1,10 @@
+-- start_matchsubs
+-- m/\(cost=.*\)/
+-- s/\(cost=.*\)//
+--
+-- m/\(slice.*\)/
+-- s/\(slice.*\)//
+-- end_matchsubs
 -- start_ignore
 create schema subselect_gp;
 set search_path to subselect_gp, public;
@@ -1414,3 +1421,61 @@ select (SELECT EXISTS
                   FROM pg_views
                   WHERE schemaname = a)) from tmp;
 drop table tmp;
+
+-- Test LEAST() and GREATEST() with an embedded subquery
+drop table if exists foo;
+
+create table foo (a int, b int) distributed by(a);
+insert into foo values (1, 2), (2, 3), (3, 4);
+analyze foo;
+
+explain (costs off) select foo.a from foo where foo.a <= LEAST(foo.b, (SELECT 1), NULL);
+select foo.a from foo where foo.a <= LEAST(foo.b, (SELECT 1), NULL);
+
+explain (costs off) select foo.a from foo where foo.a <= GREATEST(foo.b, (SELECT 1), NULL);
+select foo.a from foo where foo.a <= GREATEST(foo.b, (SELECT 1), NULL);
+
+explain (costs off) select least((select 5), greatest(b, NULL, (select 1)), a) from foo;
+select least((select 5), greatest(b, NULL, (select 1)), a) from foo;
+
+drop table foo;
+-- Test subquery within ScalarArrayRef or ScalarArrayRefIndexList
+drop table if exists bar;
+
+create table bar (a int[], b int[][]) distributed by(a);
+insert into bar values (ARRAY[1, 2, 3], ARRAY[[1, 2, 3], [4, 5, 6]]);
+analyze bar;
+
+explain (costs off) select (select a from bar)[1] from bar;
+select (select a from bar)[1] from bar;
+
+explain (costs off) select (select a from bar)[(select 1)] from bar;
+select (select a from bar)[(select 1)] from bar;
+
+explain (costs off) select (select b from bar)[1][1:3] from bar;
+select (select b from bar)[1][1:3] from bar;
+
+explain (costs off) select (select b from bar)[(select 1)][1:3] from bar;
+select (select b from bar)[(select 1)][1:3] from bar;
+drop table bar;
+
+create table outer_foo(a int primary key, b int);
+create table inner_bar(a int, b int) distributed randomly;
+insert into outer_foo values (generate_series(1,20), generate_series(11,30));
+insert into inner_bar values (generate_series(1,20), generate_series(25,44));
+set optimizer to off;
+explain (costs off) select t1.a from outer_foo t1,  LATERAL(SELECT  distinct t2.a from inner_bar t2 where t1.b=t2.b) q order by 1;
+explain (costs off) select t1.a from outer_foo t1,  LATERAL(SELECT  distinct t2.a from inner_bar t2 where t1.b=t2.b) q;
+select t1.a from outer_foo t1,  LATERAL(SELECT  distinct t2.a from inner_bar t2 where t1.b=t2.b) q order by 1;
+
+create table t(a int, b int);
+explain (costs off) with cte(x) as (select t1.a from outer_foo t1, LATERAL(SELECT distinct t2.a from inner_bar t2 where t1.b=t2.b) q order by 1)
+select * from t where a > (select count(1) from cte where x > t.a + random());
+
+with cte(x) as (select t1.a from outer_foo t1, LATERAL(SELECT distinct t2.a from inner_bar t2 where t1.b=t2.b) q order by 1)
+select * from t where a > (select count(1) from cte where x > t.a + random());
+
+reset optimizer;
+drop table outer_foo;
+drop table inner_bar;
+drop table t;

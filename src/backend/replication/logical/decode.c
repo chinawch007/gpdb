@@ -73,6 +73,8 @@ static void DecodeCommit(LogicalDecodingContext *ctx, XLogRecordBuffer *buf,
 						 xl_xact_parsed_commit *parsed, TransactionId xid);
 static void DecodeAbort(LogicalDecodingContext *ctx, XLogRecordBuffer *buf,
 						xl_xact_parsed_abort *parsed, TransactionId xid);
+static void DecodeDistributedForget(LogicalDecodingContext *ctx,
+						xl_xact_parsed_distributed_forget *parsed, XLogRecPtr start_lsn, XLogRecPtr end_lsn);
 
 /* common function to decode tuples */
 static void DecodeXLogTuple(char *data, Size len, ReorderBufferTupleBuf *tup);
@@ -203,6 +205,7 @@ DecodeXLogOp(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
 		case XLOG_NOOP:
 		case XLOG_NEXTOID:
 		case XLOG_NEXTGXID:
+		case XLOG_LATESTCOMPLETED_GXID:
 		case XLOG_SWITCH:
 		case XLOG_BACKUP_END:
 		case XLOG_PARAMETER_CHANGE:
@@ -308,6 +311,22 @@ DecodeXactOp(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
 			 */
 			ReorderBufferProcessXid(reorder, XLogRecGetXid(r), buf->origptr);
 			break;
+		case XLOG_XACT_DISTRIBUTED_COMMIT:
+			{
+				/* do nothing */
+				break;
+			}
+		case XLOG_XACT_DISTRIBUTED_FORGET:
+			{
+				xl_xact_distributed_forget *xlrec;
+				xl_xact_parsed_distributed_forget parsed;
+
+				xlrec = (xl_xact_distributed_forget *) XLogRecGetData(r);
+				ParseDistributedForgetRecord(XLogRecGetInfo(buf->record), xlrec, &parsed);
+
+				DecodeDistributedForget(ctx, &parsed, buf->origptr, buf->endptr);
+				break;
+			}
 		default:
 			elog(ERROR, "unexpected RM_XACT_ID record type: %u", info);
 	}
@@ -649,6 +668,7 @@ DecodeCommit(LogicalDecodingContext *ctx, XLogRecordBuffer *buf,
 								 buf->origptr, buf->endptr);
 	}
 
+	ReorderBufferSetGxidAndOnePhase(ctx->reorder, xid, parsed->distribXid, parsed->is_one_phase);
 	/* replay actions of all transaction + subtransactions in order */
 	ReorderBufferCommit(ctx->reorder, xid, buf->origptr, buf->endptr,
 						commit_time, origin_id, origin_lsn);
@@ -671,6 +691,28 @@ DecodeAbort(LogicalDecodingContext *ctx, XLogRecordBuffer *buf,
 	}
 
 	ReorderBufferAbort(ctx->reorder, xid, buf->record->EndRecPtr);
+}
+
+/*
+ * Parse XLOG_XACT_DISTRIBUTED_FORGET log records.
+ * Handling 'xl_xact_parsed_distributed_forget' needn't get through ReorderBuffer,
+ * so we directly call 'distributed_forget_cb_wrapper'.
+ */
+static void
+DecodeDistributedForget(LogicalDecodingContext *ctx,
+						xl_xact_parsed_distributed_forget *parsed, XLogRecPtr start_lsn, XLogRecPtr end_lsn)
+{
+	/*
+	 * ‘DecodeCommit’ also does this check, because the log file
+	 * contains transaction logs of different databases, but the
+	 * logical decoding of each slot only targets a single database,
+	 * so it is necessary to filter out the logs of other databases.
+	 */
+	if (parsed->dbId != InvalidOid && parsed->dbId != ctx->slot->data.database)
+		return;
+	if (SnapBuildXactNeedsSkip(ctx->snapshot_builder, start_lsn))
+		return;
+	distributed_forget_cb_wrapper(ctx, parsed->gxid, parsed->nsegs, start_lsn, end_lsn);
 }
 
 /*

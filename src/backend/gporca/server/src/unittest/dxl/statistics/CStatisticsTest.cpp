@@ -133,8 +133,8 @@ CStatisticsTest::EresUnittest_UnionAll()
 				mp, md_accessor, dxl_derived_rel_stats_array);
 		dxl_derived_rel_stats_array->Release();
 
-		GPOS_ASSERT(nullptr != pdrgpstatBefore);
-		GPOS_ASSERT(2 == pdrgpstatBefore->Size());
+		GPOS_UNITTEST_ASSERT(nullptr != pdrgpstatBefore);
+		GPOS_UNITTEST_ASSERT(2 == pdrgpstatBefore->Size());
 		CStatistics *pstats1 = (*pdrgpstatBefore)[0];
 		CStatistics *pstats2 = (*pdrgpstatBefore)[1];
 
@@ -149,7 +149,7 @@ CStatisticsTest::EresUnittest_UnionAll()
 				mp, pstats1, pstats2, pdrgpulColIdOutput, pdrgpulColIdInput1,
 				pdrgpulColIdInput2);
 
-		GPOS_ASSERT(nullptr != pstatsOutput);
+		GPOS_UNITTEST_ASSERT(nullptr != pstatsOutput);
 
 		CStatisticsArray *pdrgpstatOutput = GPOS_NEW(mp) CStatisticsArray(mp);
 		pdrgpstatOutput->Append(pstatsOutput);
@@ -597,8 +597,8 @@ CStatisticsTest::Pdrgpstatspred2(CMemoryPool *mp)
 		GPOS_NEW(mp) CWStringDynamic(mp, GPOS_WSZ_LIT("HxEAAA=="));
 	CWStringDynamic *pstrUpperDate =
 		GPOS_NEW(mp) CWStringDynamic(mp, GPOS_WSZ_LIT("LREAAA=="));
-	LINT lLowerDate = LINT(4383);
-	LINT lUpperDate = LINT(4397);
+	LINT lLowerDate = LINT(INT64_C(378691200000000));
+	LINT lUpperDate = LINT(INT64_C(379900800000000));
 	StatsFilterGeneric(mp, 4, GPDB_DATE, pstrLowerDate, pstrUpperDate,
 					   lLowerDate, lUpperDate, pdrgpstatspred);
 
