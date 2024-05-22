@@ -16,36 +16,24 @@ CREATE OR REPLACE FUNCTION test_distributed_forget() RETURNS text AS $$
 DECLARE
   gxid int8;
   nsegs int;
-  get_change_gxid int8;
-  get_change_nsegs int;
+  expect_change text;
   get_change_result text;
-  get_change_part1 text;
-  get_change_part2 text;
   ret text;
 BEGIN
   BEGIN
     -- Get the actual gxid.
     SELECT col_gxid FROM test_table limit 1 INTO gxid;
-
     -- Get the actual number of segments executing the distributed transaction.
     select count(distinct gp_segment_id) from test_table into nsegs;
+    select 'DISTRIBUTED_FORGET ' || gxid::text || ',' || nsegs::text || ' segments' into expect_change;
 
     SELECT data FROM pg_logical_slot_get_changes('regression_slot_p', NULL, NULL) INTO get_change_result;
 
-    -- Get the distributed-transaction-id from decoded log content.
-    SELECT * FROM SPLIT_PART(get_change_result, ',', 1) INTO get_change_part1;
-    SELECT * FROM SPLIT_PART(get_change_part1, ' ', 2) INTO get_change_gxid;
-
-    -- Get the number of segments executing the distributed transactions from  decoded log content.
-    SELECT * FROM SPLIT_PART(get_change_result, ',', 2) INTO get_change_part2;
-    SELECT * FROM SPLIT_PART(get_change_part2, ' ', 1) INTO get_change_nsegs;
-
-    IF gxid = get_change_gxid AND nsegs = get_change_nsegs THEN
+    IF expect_change = get_change_result THEN
        ret := 'result match';
     ELSE
        ret := 'result not match';
     END IF;
-    
   END;
   RETURN ret;
 END;
@@ -59,7 +47,6 @@ INSERT INTO test_table SELECT * FROM generate_series(100,500,100);
 update test_table set col_gxid = (SELECT * FROM gp_distributed_xid());
 END;
 
-SELECT FROM pg_sleep(5); -- distributed_forget will be generated later
 SELECT * FROM test_distributed_forget();
 
 -- Clean
