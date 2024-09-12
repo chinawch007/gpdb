@@ -244,6 +244,7 @@ typedef struct xl_xact_xinfo
 typedef struct xl_xact_distrib
 {
 	DistributedTransactionId distrib_xid;
+	bool is_one_phase;
 } xl_xact_distrib;
 
 typedef struct xl_xact_dbinfo
@@ -361,6 +362,8 @@ typedef struct xl_xact_parsed_commit
 	TimestampTz origin_timestamp;
 
 	DistributedTransactionId        distribXid;
+
+	bool is_one_phase;
 } xl_xact_parsed_commit;
 
 typedef xl_xact_parsed_commit xl_xact_parsed_prepare;
@@ -396,7 +399,14 @@ typedef struct xl_xact_parsed_abort
 typedef struct xl_xact_distributed_forget
 {
 	DistributedTransactionId gxid;
+	int cnt_segments;
 } xl_xact_distributed_forget;
+
+typedef struct xl_xact_parsed_distributed_forget
+{
+	DistributedTransactionId gxid;
+	int cnt_segments;
+} xl_xact_parsed_distributed_forget;
 
 /* ----------------
  *		extern definitions
@@ -509,6 +519,7 @@ extern const char *xact_identify(uint8 info);
 /* also in xactdesc.c, so they can be shared between front/backend code */
 extern void ParseCommitRecord(uint8 info, xl_xact_commit *xlrec, xl_xact_parsed_commit *parsed);
 extern void ParseAbortRecord(uint8 info, xl_xact_abort *xlrec, xl_xact_parsed_abort *parsed);
+extern void ParseDistributedForgetRecord(uint8 info, xl_xact_distributed_forget *xlrec, xl_xact_parsed_distributed_forget *parsed);
 
 extern void EnterParallelMode(void);
 extern void ExitParallelMode(void);

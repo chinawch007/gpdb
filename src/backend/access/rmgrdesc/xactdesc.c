@@ -143,8 +143,17 @@ ParseCommitRecord(uint8 info, xl_xact_commit *xlrec, xl_xact_parsed_commit *pars
 		xl_xact_distrib *xl_distrib = (xl_xact_distrib *) data;
 
 		parsed->distribXid = xl_distrib->distrib_xid;
+		parsed->is_one_phase = xl_distrib->is_one_phase;
+
 		data += sizeof(xl_xact_distrib);
 	}
+}
+
+void
+ParseDistributedForgetRecord(uint8 info, xl_xact_distributed_forget *xlrec, xl_xact_parsed_distributed_forget *parsed)
+{
+	parsed->gxid = xlrec->gxid;
+	parsed->cnt_segments = xlrec->cnt_segments;
 }
 
 void

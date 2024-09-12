@@ -288,6 +288,8 @@ typedef struct ReorderBufferTXN
 	 */
 	dlist_node	node;
 
+	DistributedTransactionId gxid;
+	bool is_one_phase;
 } ReorderBufferTXN;
 
 /* so we can define the callbacks used inside struct ReorderBuffer itself */
@@ -323,6 +325,10 @@ typedef void (*ReorderBufferMessageCB) (ReorderBuffer *rb,
 										const char *prefix, Size sz,
 										const char *message);
 
+typedef void (*ReorderBufferDistributedForgetCB) (
+										ReorderBuffer *rb,
+										DistributedTransactionId gxid, int cnt_segments);										
+
 struct ReorderBuffer
 {
 	/*
@@ -334,7 +340,7 @@ struct ReorderBuffer
 	 * Transactions that could be a toplevel xact, ordered by LSN of the first
 	 * record bearing that xid.
 	 */
-	dlist_head	toplevel_by_lsn;
+	dlist_head	toplevel_by_lsn;//暂时理解为全部事务列表吧
 
 	/*
 	 * Transactions and subtransactions that have a base snapshot, ordered by
@@ -360,6 +366,8 @@ struct ReorderBuffer
 	ReorderBufferApplyTruncateCB apply_truncate;
 	ReorderBufferCommitCB commit;
 	ReorderBufferMessageCB message;
+
+	ReorderBufferDistributedForgetCB distributed_forget;
 
 	/*
 	 * Pointer that will be passed untouched to the callbacks.
@@ -408,7 +416,8 @@ void		ReorderBufferQueueMessage(ReorderBuffer *, TransactionId, Snapshot snapsho
 									  Size message_size, const char *message);
 void		ReorderBufferCommit(ReorderBuffer *, TransactionId,
 								XLogRecPtr commit_lsn, XLogRecPtr end_lsn,
-								TimestampTz commit_time, RepOriginId origin_id, XLogRecPtr origin_lsn);
+								TimestampTz commit_time, RepOriginId origin_id, XLogRecPtr origin_lsn, DistributedTransactionId gxid, bool is_one_phase);
+void		ReorderBufferDistributedForget(ReorderBuffer *rb, DistributedTransactionId gxid, int cnt_segments);
 void		ReorderBufferAssignChild(ReorderBuffer *, TransactionId, TransactionId, XLogRecPtr commit_lsn);
 void		ReorderBufferCommitChild(ReorderBuffer *, TransactionId, TransactionId,
 									 XLogRecPtr commit_lsn, XLogRecPtr end_lsn);

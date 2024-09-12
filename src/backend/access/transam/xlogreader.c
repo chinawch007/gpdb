@@ -74,7 +74,7 @@ report_invalid_record(XLogReaderState *state, const char *fmt,...)
  * Returns NULL if the xlogreader couldn't be allocated.
  */
 XLogReaderState *
-XLogReaderAllocate(int wal_segment_size, XLogPageReadCB pagereadfunc,
+XLogReaderAllocate(int wal_segment_size, XLogPageReadCB pagereadfunc,//妈啊，实际读取函数。。。
 				   void *private_data)
 {
 	XLogReaderState *state;
@@ -208,7 +208,7 @@ allocate_recordbuf(XLogReaderState *state, uint32 reclength)
  * Attempt to read an XLOG record.
  *
  * If RecPtr is valid, try to read a record at that position.  Otherwise
- * try to read a record just after the last one previously read.
+ * try to read a record just after the last one previously read.//这里说了，可以读之前读过的下一个
  *
  * If the read_page callback fails to read the requested data, NULL is
  * returned.  The callback is expected to have reported the error; errormsg

@@ -1131,7 +1131,6 @@ StartLogicalReplication(StartReplicationCmd *cmd)
 							  WalSndPrepareWrite, WalSndWriteData,
 							  WalSndUpdateProgress);
 
-
 	WalSndSetState(WALSNDSTATE_CATCHUP);
 
 	/* Send a CopyBothResponse message, and start streaming */
@@ -1140,7 +1139,6 @@ StartLogicalReplication(StartReplicationCmd *cmd)
 	pq_sendint16(&buf, 0);
 	pq_endmessage(&buf);
 	pq_flush();
-
 
 	/* Start reading WAL from the oldest required WAL. */
 	logical_startptr = MyReplicationSlot->data.restart_lsn;

@@ -68,6 +68,8 @@ static void message_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
 							   XLogRecPtr message_lsn, bool transactional,
 							   const char *prefix, Size message_size, const char *message);
 
+static void distributed_forget_cb_wrapper(ReorderBuffer *cache, DistributedTransactionId gxid, int cnt_segments);
+
 static void LoadOutputPlugin(OutputPluginCallbacks *callbacks, char *plugin);
 
 /*
@@ -192,6 +194,8 @@ StartupDecodingContext(List *output_plugin_options,
 	ctx->reorder->commit = commit_cb_wrapper;
 	ctx->reorder->message = message_cb_wrapper;
 
+	ctx->reorder->distributed_forget = distributed_forget_cb_wrapper;
+
 	ctx->out = makeStringInfo();
 	ctx->prepare_write = prepare_write;
 	ctx->write = do_write;
@@ -311,7 +315,6 @@ CreateInitDecodingContext(char *plugin,
 	 * ----
 	 */
 	LWLockAcquire(ProcArrayLock, LW_EXCLUSIVE);
-
 	xmin_horizon = GetOldestSafeDecodingTransactionId(!need_full_snapshot);
 
 	SpinLockAcquire(&slot->mutex);
@@ -425,7 +428,6 @@ CreateDecodingContext(XLogRecPtr start_lsn,
 
 		start_lsn = slot->data.confirmed_flush;
 	}
-
 	ctx = StartupDecodingContext(output_plugin_options,
 								 start_lsn, InvalidTransactionId, false,
 								 fast_forward, read_page, prepare_write,
@@ -492,7 +494,6 @@ DecodingContextFindStartpoint(LogicalDecodingContext *ctx)
 		startptr = InvalidXLogRecPtr;
 
 		LogicalDecodingProcessRecord(ctx, ctx->reader);
-
 		/* only continue till we found a consistent spot */
 		if (DecodingContextReady(ctx))
 			break;
@@ -727,6 +728,22 @@ commit_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
 
 	/* Pop the error context stack */
 	error_context_stack = errcallback.previous;
+}
+
+static void distributed_forget_cb_wrapper(ReorderBuffer *cache, DistributedTransactionId gxid, int cnt_segments)
+{
+	LogicalDecodingContext *ctx = cache->private_data;
+	//LogicalErrorCallbackState state;
+	//ErrorContextCallback errcallback;看看这个到时候是否需要？
+
+	/* set output state */
+	//这3条是必须的吗？我不写会不会有问题？
+	ctx->accept_writes = true;
+	//ctx->write_xid = txn->xid;
+	//ctx->write_location = txn->end_lsn;
+
+	/* do the actual work: call callback */
+	ctx->callbacks.distributed_forget_cb(ctx, gxid, cnt_segments);
 }
 
 static void
@@ -1063,7 +1080,6 @@ LogicalConfirmReceivedLocation(XLogRecPtr lsn)
 			MyReplicationSlot->candidate_restart_valid <= lsn)
 		{
 			Assert(MyReplicationSlot->candidate_restart_lsn != InvalidXLogRecPtr);
-
 			MyReplicationSlot->data.restart_lsn = MyReplicationSlot->candidate_restart_lsn;
 			MyReplicationSlot->candidate_restart_lsn = InvalidXLogRecPtr;
 			MyReplicationSlot->candidate_restart_valid = InvalidXLogRecPtr;

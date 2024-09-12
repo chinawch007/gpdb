@@ -77,6 +77,10 @@ static void DecodeAbort(LogicalDecodingContext *ctx, XLogRecordBuffer *buf,
 /* common function to decode tuples */
 static void DecodeXLogTuple(char *data, Size len, ReorderBufferTupleBuf *tup);
 
+static void DecodeDistributedForget(LogicalDecodingContext *ctx, XLogRecordBuffer *buf,
+			                        xl_xact_parsed_distributed_forget *parsed, 
+						            DistributedTransactionId gxid, int cnt_segments);
+
 /*
  * Take every XLogReadRecord()ed record and perform the actions required to
  * decode it using the output plugin already setup in the logical decoding
@@ -245,7 +249,6 @@ DecodeXactOp(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
 	{
 		case XLOG_XACT_COMMIT:
 		case XLOG_XACT_COMMIT_PREPARED:
-			{
 				xl_xact_commit *xlrec;
 				xl_xact_parsed_commit parsed;
 				TransactionId xid;
@@ -254,11 +257,36 @@ DecodeXactOp(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
 				ParseCommitRecord(XLogRecGetInfo(buf->record), xlrec, &parsed);
 
 				if (!TransactionIdIsValid(parsed.twophase_xid))
+				{
 					xid = XLogRecGetXid(r);
+				}
 				else
+				{
 					xid = parsed.twophase_xid;
+				}
 
 				DecodeCommit(ctx, buf, &parsed, xid);
+				break;
+			}
+		case XLOG_XACT_DISTRIBUTED_COMMIT:
+			{
+				//do nothing
+				break;
+			}
+		case XLOG_XACT_DISTRIBUTED_FORGET:
+			{
+				xl_xact_distributed_forget *xlrec;
+				xl_xact_parsed_distributed_forget parsed;
+				DistributedTransactionId gid;
+				int cnt_segments;
+
+				xlrec = (xl_xact_distributed_forget *) XLogRecGetData(r);
+				ParseDistributedForgetRecord(XLogRecGetInfo(buf->record), xlrec, &parsed);
+
+				gid = parsed.gxid;
+				cnt_segments = parsed.cnt_segments;
+
+				DecodeDistributedForget(ctx, buf, &parsed, gid, cnt_segments);
 				break;
 			}
 		case XLOG_XACT_ABORT:
@@ -651,7 +679,14 @@ DecodeCommit(LogicalDecodingContext *ctx, XLogRecordBuffer *buf,
 
 	/* replay actions of all transaction + subtransactions in order */
 	ReorderBufferCommit(ctx->reorder, xid, buf->origptr, buf->endptr,
-						commit_time, origin_id, origin_lsn);
+						commit_time, origin_id, origin_lsn, parsed->distribXid, parsed->is_one_phase);
+}
+
+static void
+DecodeDistributedForget(LogicalDecodingContext *ctx, XLogRecordBuffer *buf,
+			 xl_xact_parsed_distributed_forget *parsed, DistributedTransactionId gxid, int cnt_segments)
+{
+	ReorderBufferDistributedForget(ctx->reorder, gxid, cnt_segments);
 }
 
 /*

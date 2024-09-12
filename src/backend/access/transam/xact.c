@@ -1793,6 +1793,7 @@ RecordDistributedForgetCommitted(DistributedTransactionId gxid)
 	xl_xact_distributed_forget xlrec;
 
 	xlrec.gxid = gxid;
+	xlrec.cnt_segments = list_length(MyTmGxactLocal->dtxSegments);
 
 	XLogBeginInsert();
 	XLogRegisterData((char *) &xlrec, sizeof(xl_xact_distributed_forget));
@@ -6882,10 +6883,18 @@ XactLogCommitRecord(TimestampTz commit_time,
 		xl_origin.origin_timestamp = replorigin_session_origin_timestamp;
 	}
 
-	if (isDtxPrepared || isOnePhaseQE)
+	if (isDtxPrepared || isOnePhaseQE || info == XLOG_XACT_COMMIT_PREPARED)
 	{
 		xl_xinfo.xinfo |= XACT_XINFO_HAS_DISTRIB;
 		xl_distrib.distrib_xid = getDistributedTransactionId();
+		if (isOnePhaseQE)
+		{
+			xl_distrib.is_one_phase = true;
+		}
+		else
+		{
+			xl_distrib.is_one_phase = false;
+		}
 	}
 
 	if (xl_xinfo.xinfo != 0)
